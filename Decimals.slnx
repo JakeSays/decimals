@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path=".gitattributes" />
+    <File Path=".gitignore" />
+    <File Path="Directory.Build.props" />
+  </Folder>
+  <Project Path="Benchmarks/Benchmarks.csproj" />
+  <Project Path="Decimals/Decimals.csproj" />
+  <Project Path="Decimals.Conformance/Decimals.Conformance.csproj" />
+  <Project Path="DecTest/DecTest.csproj" />
+  <Project Path="Tests/Tests.csproj" />
+</Solution>

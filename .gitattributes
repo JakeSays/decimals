@@ -1,0 +1,13 @@
+# Line endings are decided here rather than by whatever core.autocrlf a contributor's
+# machine happens to have.
+
+# Everything is LF, in the repository and in the working tree, on every platform. "auto"
+# still lets git detect a binary file and leave it alone.
+* text=auto eol=lf
+
+# Except the testcase corpus, which is vendored verbatim from Mike Cowlishaw's distribution
+# and is not ours to reformat: 89 of those files carry CRLF as published, and the generated
+# files beside them carry LF. Turning conversion off in both directions stores whatever is
+# on disk. This affects conversion only -- they stay text as far as diff and merge are
+# concerned.
+TestData/** -text

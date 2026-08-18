@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Decimals.Benchmarks</RootNamespace>
+    <!-- No AssemblyName override here, unlike DecTest: BenchmarkDotNet locates the project
+         file by searching for one named after the assembly, and builds the generated
+         boilerplate against it. A kebab-case binary name would leave it unable to find
+         this project at all. -->
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- BenchmarkDotNet refuses to measure a debug build, and says so loudly. -->
+    <Optimize>true</Optimize>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" Version="0.15.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Decimals\Decimals.csproj" />
+  </ItemGroup>
+
+</Project>
