@@ -3,6 +3,7 @@
 
 using System.Buffers;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Unicode;
 
@@ -18,6 +19,7 @@ namespace Decimals;
 /// Trailing zeros are part of the value -- <c>1.00</c> and <c>1.0</c> are different members
 /// of the same cohort and print differently.
 /// </remarks>
+[SkipLocalsInit]
 internal static class DecimalFormatter
 {
     private const int PlainNotationFloor = -6;
@@ -29,26 +31,68 @@ internal static class DecimalFormatter
     /// </summary>
     private static NumberFormatInfo Invariant => CultureInfo.InvariantCulture.NumberFormat;
 
+    /// <summary>The widest a <see cref="UInt128"/> coefficient is written.</summary>
+    private const int MaximumDigits = 39;
+
+    /// <summary>The "0." and the zeros behind it that plain notation can put in front.</summary>
+    private const int PlainLeadingZeros = 7;
+
+    /// <summary>"E", a sign, and the digits of an exponent no format exceeds.</summary>
+    private const int ExponentLength = 7;
+
+    /// <summary>Covers every culture whose signs and separator are of ordinary length.</summary>
+    private const int StackBufferLength = 64;
+
     public static string ToScientificString(UnpackedDecimal<UInt128> value) =>
         ToScientificString(value, Invariant);
 
     public static string ToScientificString(UnpackedDecimal<UInt128> value,
-        NumberFormatInfo numberFormat)
-    {
-        var builder = new StringBuilder(48);
-        Write(builder, value, engineering: false, numberFormat);
-        return builder.ToString();
-    }
+        NumberFormatInfo numberFormat) =>
+        Render(value, engineering: false, numberFormat);
 
     public static string ToEngineeringString(UnpackedDecimal<UInt128> value) =>
         ToEngineeringString(value, Invariant);
 
     public static string ToEngineeringString(UnpackedDecimal<UInt128> value,
+        NumberFormatInfo numberFormat) =>
+        Render(value, engineering: true, numberFormat);
+
+    /// <summary>
+    /// A finite value written into a stack buffer and handed over as a string, which costs
+    /// one allocation. Going through a <see cref="StringBuilder"/> costs two -- the builder's
+    /// own array and then the string copied out of it -- and that was most of what formatting
+    /// spent its time on. The specials keep the builder: they are rare, and a culture's
+    /// symbols are strings of its own choosing rather than anything this can size for.
+    /// </summary>
+    private static string Render(UnpackedDecimal<UInt128> value, bool engineering,
         NumberFormatInfo numberFormat)
     {
-        var builder = new StringBuilder(48);
-        Write(builder, value, engineering: true, numberFormat);
-        return builder.ToString();
+        if (value.Kind != DecimalKind.Finite)
+        {
+            var builder = new StringBuilder(48);
+            WriteSpecial(builder, value, numberFormat);
+            return builder.ToString();
+        }
+
+        var required = FiniteUpperBound(numberFormat);
+        Span<char> buffer = required <= StackBufferLength
+            ? stackalloc char[StackBufferLength]
+            : new char[required];
+
+        var written = WriteFinite(buffer, value, engineering, numberFormat);
+        return new string(buffer[..written]);
+    }
+
+    /// <summary>
+    /// The most room a finite value can need. Everything in it is either a fixed width or a
+    /// string the culture supplies, so this is exact rather than a guess.
+    /// </summary>
+    private static int FiniteUpperBound(NumberFormatInfo numberFormat)
+    {
+        return numberFormat.NegativeSign.Length
+            + numberFormat.PositiveSign.Length
+            + numberFormat.NumberDecimalSeparator.Length
+            + MaximumDigits + PlainLeadingZeros + ExponentLength;
     }
 
     /// <summary>
@@ -172,6 +216,14 @@ internal static class DecimalFormatter
     public static bool TryFormat(UnpackedDecimal<UInt128> value, Span<char> destination,
         out int written, ReadOnlySpan<char> format, IFormatProvider? provider)
     {
+        // The two notations this library writes itself go straight into the caller's span.
+        // The whole point of a TryFormat is to keep a string out of it, and building one
+        // here to copy out of was the last place formatting allocated for no reason.
+        if (value.Kind == DecimalKind.Finite && TryReadNotation(format, out var engineering))
+        {
+            return TryWriteFinite(value, destination, out written, engineering, provider);
+        }
+
         var text = Format(value, format, provider);
         if (text.Length > destination.Length)
         {
@@ -184,6 +236,59 @@ internal static class DecimalFormatter
         return true;
     }
 
+    private static bool TryWriteFinite(UnpackedDecimal<UInt128> value, Span<char> destination,
+        out int written, bool engineering, IFormatProvider? provider)
+    {
+        var numberFormat = NumberFormatInfo.GetInstance(provider);
+        var required = FiniteUpperBound(numberFormat);
+
+        // A span already wide enough for the longest this value could be is written into
+        // directly. The scratch buffer below is only there to keep a shorter one from
+        // being half filled before the length is known.
+        if (destination.Length >= required)
+        {
+            written = WriteFinite(destination, value, engineering, numberFormat);
+            return true;
+        }
+
+        Span<char> buffer = required <= StackBufferLength
+            ? stackalloc char[StackBufferLength]
+            : new char[required];
+
+        var length = WriteFinite(buffer, value, engineering, numberFormat);
+        if (length > destination.Length)
+        {
+            written = 0;
+            return false;
+        }
+
+        buffer[..length].CopyTo(destination);
+        written = length;
+        return true;
+    }
+
+    /// <summary>
+    /// Whether the format is one this writes itself, and which of the two notations it asks
+    /// for. Everything else goes through <see cref="Format"/>.
+    /// </summary>
+    private static bool TryReadNotation(ReadOnlySpan<char> format, out bool engineering)
+    {
+        if (format.IsEmpty || format.Equals("G", StringComparison.OrdinalIgnoreCase))
+        {
+            engineering = false;
+            return true;
+        }
+
+        if (format.Equals("E", StringComparison.OrdinalIgnoreCase))
+        {
+            engineering = true;
+            return true;
+        }
+
+        engineering = false;
+        return false;
+    }
+
     /// <summary>
     /// The same output as UTF-8. The digits and the exponent are ASCII, but a culture's
     /// signs and separators need not be, so the text is transcoded rather than narrowed.
@@ -191,6 +296,28 @@ internal static class DecimalFormatter
     public static bool TryFormat(UnpackedDecimal<UInt128> value, Span<byte> utf8Destination,
         out int written, ReadOnlySpan<char> format, IFormatProvider? provider)
     {
+        // As with the UTF-16 overload: the notations this writes itself are transcoded
+        // out of a stack buffer rather than out of a string built to be thrown away.
+        if (value.Kind == DecimalKind.Finite && TryReadNotation(format, out var engineering))
+        {
+            var numberFormat = NumberFormatInfo.GetInstance(provider);
+            var required = FiniteUpperBound(numberFormat);
+
+            Span<char> buffer = required <= StackBufferLength
+                ? stackalloc char[StackBufferLength]
+                : new char[required];
+
+            var length = WriteFinite(buffer, value, engineering, numberFormat);
+            if (Utf8.FromUtf16(buffer[..length], utf8Destination, out _, out written)
+                != OperationStatus.Done)
+            {
+                written = 0;
+                return false;
+            }
+
+            return true;
+        }
+
         var text = Format(value, format, provider);
         if (Utf8.FromUtf16(text, utf8Destination, out _, out written) != OperationStatus.Done)
         {
@@ -209,7 +336,7 @@ internal static class DecimalFormatter
             : double.NaN;
     }
 
-    private static void Write(StringBuilder builder, UnpackedDecimal<UInt128> value, bool engineering,
+    private static void WriteSpecial(StringBuilder builder, UnpackedDecimal<UInt128> value,
         NumberFormatInfo numberFormat)
     {
         // An infinity carries its sign inside the symbol, which is why it is written before
@@ -245,47 +372,65 @@ internal static class DecimalFormatter
 
             return;
         }
+    }
 
-        Span<char> digits = stackalloc char[40];
+    /// <summary>
+    /// A finite value, written straight into <paramref name="destination"/>. The caller sizes
+    /// it from <see cref="FiniteUpperBound"/>, so nothing here has to test for room.
+    /// </summary>
+    private static int WriteFinite(Span<char> destination, UnpackedDecimal<UInt128> value,
+        bool engineering, NumberFormatInfo numberFormat)
+    {
+        var index = 0;
+        if (value.IsNegative)
+        {
+            Put(destination, ref index, numberFormat.NegativeSign);
+        }
+
+        // Thirty-nine digits is the widest a UInt128 goes, and the chunked writer pads each
+        // chunk to nineteen, so it can put down that many exactly. The rest is headroom.
+        Span<char> digits = stackalloc char[48];
         var digitCount = WriteDigits(value.Coefficient, digits);
         var coefficient = digits[^digitCount..];
         var adjusted = value.Exponent + digitCount - 1;
 
         if (value.Exponent <= 0 && adjusted >= PlainNotationFloor)
         {
-            WritePlain(builder, coefficient, value.Exponent, adjusted, numberFormat);
-            return;
+            WritePlain(destination, ref index, coefficient, value.Exponent, adjusted, numberFormat);
+            return index;
         }
 
-        WriteExponential(builder, coefficient, adjusted, engineering, numberFormat);
+        WriteExponential(destination, ref index, coefficient, adjusted, engineering, numberFormat);
+        return index;
     }
 
-    private static void WritePlain(StringBuilder builder, ReadOnlySpan<char> coefficient,
-        int exponent, int adjusted, NumberFormatInfo numberFormat)
+    private static void WritePlain(Span<char> destination, ref int index,
+        ReadOnlySpan<char> coefficient, int exponent, int adjusted, NumberFormatInfo numberFormat)
     {
         if (exponent == 0)
         {
-            builder.Append(coefficient);
+            Put(destination, ref index, coefficient);
             return;
         }
 
         if (adjusted >= 0)
         {
             var integerLength = adjusted + 1;
-            builder.Append(coefficient[..integerLength]);
-            builder.Append(numberFormat.NumberDecimalSeparator);
-            builder.Append(coefficient[integerLength..]);
+            Put(destination, ref index, coefficient[..integerLength]);
+            Put(destination, ref index, numberFormat.NumberDecimalSeparator);
+            Put(destination, ref index, coefficient[integerLength..]);
             return;
         }
 
-        builder.Append('0');
-        builder.Append(numberFormat.NumberDecimalSeparator);
-        builder.Append('0', -adjusted - 1);
-        builder.Append(coefficient);
+        destination[index++] = '0';
+        Put(destination, ref index, numberFormat.NumberDecimalSeparator);
+        Fill(destination, ref index, '0', -adjusted - 1);
+        Put(destination, ref index, coefficient);
     }
 
-    private static void WriteExponential(StringBuilder builder, ReadOnlySpan<char> coefficient,
-        int adjusted, bool engineering, NumberFormatInfo numberFormat)
+    private static void WriteExponential(Span<char> destination, ref int index,
+        ReadOnlySpan<char> coefficient, int adjusted, bool engineering,
+        NumberFormatInfo numberFormat)
     {
         var integerLength = 1;
 
@@ -302,15 +447,15 @@ internal static class DecimalFormatter
                 // A zero has no digits to move left, so the exponent goes up to the next
                 // multiple of three instead and the gap is filled after the point:
                 // 0E+1 is written 0.00E+3.
-                builder.Append('0');
+                destination[index++] = '0';
                 if (offset != 0)
                 {
-                    builder.Append(numberFormat.NumberDecimalSeparator);
-                    builder.Append('0', 3 - offset);
+                    Put(destination, ref index, numberFormat.NumberDecimalSeparator);
+                    Fill(destination, ref index, '0', 3 - offset);
                     adjusted += 3 - offset;
                 }
 
-                WriteExponent(builder, adjusted, numberFormat);
+                WriteExponent(destination, ref index, adjusted, numberFormat);
                 return;
             }
 
@@ -322,24 +467,24 @@ internal static class DecimalFormatter
 
         if (coefficient.Length <= integerLength)
         {
-            builder.Append(coefficient);
-            builder.Append('0', integerLength - coefficient.Length);
+            Put(destination, ref index, coefficient);
+            Fill(destination, ref index, '0', integerLength - coefficient.Length);
         }
         else
         {
-            builder.Append(coefficient[..integerLength]);
-            builder.Append(numberFormat.NumberDecimalSeparator);
-            builder.Append(coefficient[integerLength..]);
+            Put(destination, ref index, coefficient[..integerLength]);
+            Put(destination, ref index, numberFormat.NumberDecimalSeparator);
+            Put(destination, ref index, coefficient[integerLength..]);
         }
 
-        WriteExponent(builder, adjusted, numberFormat);
+        WriteExponent(destination, ref index, adjusted, numberFormat);
     }
 
     /// <summary>
     /// Writes the exponent, unless engineering notation has brought it to zero -- 10E+1
     /// is written 100, with no exponent part at all.
     /// </summary>
-    private static void WriteExponent(StringBuilder builder, int adjusted,
+    private static void WriteExponent(Span<char> destination, ref int index, int adjusted,
         NumberFormatInfo numberFormat)
     {
         if (adjusted == 0)
@@ -347,11 +492,28 @@ internal static class DecimalFormatter
             return;
         }
 
-        builder.Append('E');
-        builder.Append(adjusted < 0
+        destination[index++] = 'E';
+        Put(destination, ref index, adjusted < 0
             ? numberFormat.NegativeSign
             : numberFormat.PositiveSign);
-        builder.Append(Math.Abs((long)adjusted).ToString(CultureInfo.InvariantCulture));
+
+        // The digit writer fills from the tail, so the cursor starts at the end.
+        Span<char> digits = stackalloc char[16];
+        var cursor = digits.Length;
+        WriteDigits((ulong)Math.Abs((long)adjusted), digits, ref cursor);
+        Put(destination, ref index, digits[cursor..]);
+    }
+
+    private static void Put(Span<char> destination, ref int index, ReadOnlySpan<char> text)
+    {
+        text.CopyTo(destination[index..]);
+        index += text.Length;
+    }
+
+    private static void Fill(Span<char> destination, ref int index, char character, int count)
+    {
+        destination.Slice(index, count).Fill(character);
+        index += count;
     }
 
     /// <summary>
@@ -361,14 +523,65 @@ internal static class DecimalFormatter
     private static int WriteDigits(UInt128 coefficient, Span<char> destination)
     {
         var index = destination.Length;
-        do
-        {
-            var next = coefficient / 10;
-            destination[--index] = (char)('0' + (uint)(coefficient - (next * 10)));
-            coefficient = next;
-        }
-        while (coefficient != UInt128.Zero);
 
+        // Peel nineteen digits at a time until what is left fits a machine word. Written the
+        // obvious way this costs a 128-bit division per digit, and there is no hardware for
+        // one; this costs a 128-bit division per nineteen, and everything after that is
+        // machine-word arithmetic whose divisions by a constant the JIT emits as multiplies.
+        if (coefficient > ulong.MaxValue)
+        {
+            var reciprocal = PowersOfTen.Reciprocal(PowersOfTen.MaxUInt64Power);
+            do
+            {
+                var next = reciprocal.Divide(coefficient);
+                WritePaddedDigits((ulong)(coefficient - (next * reciprocal.PowerOfTen)),
+                    PowersOfTen.MaxUInt64Power, destination, ref index);
+                coefficient = next;
+            }
+            while (coefficient > ulong.MaxValue);
+        }
+
+        WriteDigits((ulong)coefficient, destination, ref index);
         return destination.Length - index;
+    }
+
+    /// <summary>
+    /// A chunk written in full, leading zeros and all, because more digits follow it.
+    /// </summary>
+    private static void WritePaddedDigits(ulong value, int digits, Span<char> destination,
+        ref int index)
+    {
+        var start = index;
+        WriteDigits(value, destination, ref index);
+
+        for (var written = start - index; written < digits; written++)
+        {
+            destination[--index] = '0';
+        }
+    }
+
+    /// <summary>
+    /// The digits of a machine word, two at a time. One division per pair rather than per
+    /// digit, and the compiler turns each of them into a multiply.
+    /// </summary>
+    private static void WriteDigits(ulong value, Span<char> destination, ref int index)
+    {
+        while (value >= 100)
+        {
+            var next = value / 100;
+            var pair = (uint)(value - (next * 100));
+            destination[--index] = (char)('0' + (pair % 10));
+            destination[--index] = (char)('0' + (pair / 10));
+            value = next;
+        }
+
+        if (value >= 10)
+        {
+            destination[--index] = (char)('0' + (uint)(value % 10));
+            destination[--index] = (char)('0' + (uint)(value / 10));
+            return;
+        }
+
+        destination[--index] = (char)('0' + (uint)value);
     }
 }

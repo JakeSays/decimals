@@ -182,6 +182,85 @@ public class UInt256Tests
         }
     }
 
+    /// <summary>
+    /// The widths the arithmetic actually produces, which is where dividing shifts first and
+    /// finishes inside 128 bits. A random 256-bit value almost never lands there, so the
+    /// oracle test above exercises the long division and barely touches this path.
+    /// </summary>
+    [Fact]
+    public void DivideByPowerOfTenMatchesTheOracleJustPastUInt128()
+    {
+        var random = new Random(2718);
+
+        for (var digits = 34; digits <= 48; digits++)
+        {
+            for (var trial = 0; trial < 200; trial++)
+            {
+                var value = RandomWithDigits(random, digits);
+
+                for (var power = 1; power <= 40; power++)
+                {
+                    var quotient = UInt256.DivideByPowerOfTen(value, power, out var hasRemainder);
+
+                    var divisor = BigInteger.Pow(10, power);
+                    Assert.Equal(ToBig(value) / divisor, ToBig(quotient));
+                    Assert.Equal(!(ToBig(value) % divisor).IsZero, hasRemainder);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// The boundary the shift-first path turns on: a value that fits 128 bits once shifted
+    /// and one that does not, for every power that can reach it.
+    /// </summary>
+    [Fact]
+    public void DivideByPowerOfTenAtTheShiftBoundary()
+    {
+        for (var power = 1; power <= PowersOfTen.MaxUInt128Power; power++)
+        {
+            var divisor = BigInteger.Pow(10, power);
+
+            foreach (var value in ShiftBoundaryValues(power))
+            {
+                var quotient = UInt256.DivideByPowerOfTen(value, power, out var hasRemainder);
+
+                Assert.Equal(ToBig(value) / divisor, ToBig(quotient));
+                Assert.Equal(!(ToBig(value) % divisor).IsZero, hasRemainder);
+            }
+        }
+    }
+
+    private static IEnumerable<UInt256> ShiftBoundaryValues(int power)
+    {
+        // Either side of 2^(128+power), where the shift stops bringing the value inside
+        // 128 bits, plus the extremes.
+        var pivot = BigInteger.One << (128 + power);
+
+        yield return FromBig(pivot - 1);
+        yield return FromBig(pivot);
+        yield return FromBig(pivot + 1);
+        yield return FromBig((BigInteger.One << 128) - 1);
+        yield return FromBig(BigInteger.One << 128);
+        yield return FromBig((BigInteger.One << 128) + 1);
+        yield return UInt256.Zero;
+        yield return UInt256.One;
+    }
+
+    private static UInt256 RandomWithDigits(Random random, int digits)
+    {
+        var value = UInt256.Zero;
+        for (var position = 0; position < digits; position++)
+        {
+            var digit = position == 0
+                ? random.Next(1, 10)
+                : random.Next(0, 10);
+            value = UInt256.MultiplyByUInt64(value, 10) + new UInt256((ulong)digit);
+        }
+
+        return value;
+    }
+
     [Fact]
     public void MultiplyByPowerOfTenMatchesTheOracle()
     {

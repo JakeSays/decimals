@@ -3,6 +3,7 @@
 
 using System.Buffers;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text.Unicode;
 
 namespace Decimals;
@@ -17,6 +18,7 @@ namespace Decimals;
 /// <c>infinity</c> in any casing; NaNs are <c>nan</c> or <c>snan</c> with an optional
 /// payload of digits, whose significant length may not exceed one less than the precision.
 /// </remarks>
+[SkipLocalsInit]
 internal static class DecimalParser
 {
     /// <summary>
@@ -30,6 +32,12 @@ internal static class DecimalParser
     /// limit covers every number a format can hold, so renting is for pathological input.
     /// </summary>
     private const int StackWidenLimit = 128;
+
+    /// <summary>
+    /// The most significant digits a coefficient can gather in a machine word. Nineteen
+    /// digits always fit; the twentieth does not always, so the accumulator widens there.
+    /// </summary>
+    private const int NarrowDigitLimit = 19;
 
     /// <summary>
     /// The conversion a culture asks for: the text is rewritten into the specification's
@@ -152,19 +160,25 @@ internal static class DecimalParser
 
         var remainder = text[position..];
 
-        if (Matches(remainder, "inf") || Matches(remainder, "infinity"))
+        // A finite number begins with a digit or a point, and every special form begins
+        // with a letter, so one comparison decides which grammar applies. Without it the
+        // four case-insensitive comparisons below run on the way to every ordinary value.
+        if (remainder.Length > 0 && remainder[0] is not ((>= '0' and <= '9') or '.'))
         {
-            return new UnpackedDecimal<UInt128>(DecimalKind.Infinity, isNegative, 0, UInt128.Zero);
-        }
+            if (Matches(remainder, "inf") || Matches(remainder, "infinity"))
+            {
+                return new UnpackedDecimal<UInt128>(DecimalKind.Infinity, isNegative, 0, UInt128.Zero);
+            }
 
-        if (StartsWith(remainder, "nan"))
-        {
-            return ParseNaN<TFormat>(remainder[3..], isNegative, DecimalKind.QuietNaN, ref status);
-        }
+            if (StartsWith(remainder, "nan"))
+            {
+                return ParseNaN<TFormat>(remainder[3..], isNegative, DecimalKind.QuietNaN, ref status);
+            }
 
-        if (StartsWith(remainder, "snan"))
-        {
-            return ParseNaN<TFormat>(remainder[4..], isNegative, DecimalKind.SignalingNaN, ref status);
+            if (StartsWith(remainder, "snan"))
+            {
+                return ParseNaN<TFormat>(remainder[4..], isNegative, DecimalKind.SignalingNaN, ref status);
+            }
         }
 
         return ParseFinite<TFormat>(remainder, isNegative, rounding, ref status);
@@ -175,6 +189,7 @@ internal static class DecimalParser
         where TFormat : IDecimalFormat
     {
         var coefficient = UInt128.Zero;
+        var narrow = 0UL;
         var digitCount = 0;
         var significantCount = 0;
         var fractionDigits = 0;
@@ -220,16 +235,35 @@ internal static class DecimalParser
                 continue;
             }
 
-            if (significantCount < TFormat.Precision + 2)
-            {
-                coefficient = (coefficient * 10) + digit;
-                significantCount++;
-            }
-            else
+            if (significantCount >= TFormat.Precision + 2)
             {
                 droppedCount++;
                 droppedNonZero |= digit != 0;
             }
+            else if (significantCount < NarrowDigitLimit)
+            {
+                // Every format but the widest stops accumulating below what a machine word
+                // holds, so their coefficients are gathered without any 128-bit arithmetic.
+                // Which accumulator holds the digits is invisible to the value: the count
+                // this drops at is the one above, unchanged.
+                narrow = (narrow * 10) + digit;
+                significantCount++;
+            }
+            else
+            {
+                if (significantCount == NarrowDigitLimit)
+                {
+                    coefficient = narrow;
+                }
+
+                coefficient = (coefficient * 10) + digit;
+                significantCount++;
+            }
+        }
+
+        if (significantCount <= NarrowDigitLimit)
+        {
+            coefficient = narrow;
         }
 
         if (!sawDigit)

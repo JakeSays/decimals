@@ -206,21 +206,45 @@ internal readonly struct UInt256 : IEquatable<UInt256>, IComparable<UInt256>
         // Long division, most significant limb first, carrying the running remainder into
         // the next. Written out rather than looped over a span: the limbs are fields, and
         // indexing a span for them costs a bounds check apiece.
-        var running = (UInt128)value._limb3;
-        var limb3 = (ulong)(running / divisor);
-        running %= divisor;
+        //
+        // Each step takes the quotient and then backs the remainder out by multiplying,
+        // rather than asking for the modulus separately. There is no hardware 128-bit
+        // divide, so a second `%` here is a second software division -- eight of them across
+        // the four limbs where four will do.
+        //
+        // A reciprocal was tried here in place of the divisions and was slower, at both
+        // small and large powers. The framework has a short path for a 128-bit division
+        // whose divisor fits a machine word, and every power of ten reaching this does; a
+        // 128-by-128 multiply does not beat it.
+        //
+        // The top limb is almost always zero -- the widest intermediate the arithmetic
+        // produces is around forty digits, which is 134 bits -- and a division of zero costs
+        // exactly what any other costs, so it is worth branching past.
+        UInt128 running;
+        ulong limb3;
+        if (value._limb3 == 0)
+        {
+            running = value._limb2;
+            limb3 = 0;
+        }
+        else
+        {
+            running = value._limb3;
+            limb3 = (ulong)(running / divisor);
+            running -= (UInt128)limb3 * divisor;
+            running = (running << 64) | value._limb2;
+        }
 
-        running = (running << 64) | value._limb2;
         var limb2 = (ulong)(running / divisor);
-        running %= divisor;
+        running -= (UInt128)limb2 * divisor;
 
         running = (running << 64) | value._limb1;
         var limb1 = (ulong)(running / divisor);
-        running %= divisor;
+        running -= (UInt128)limb1 * divisor;
 
         running = (running << 64) | value._limb0;
         var limb0 = (ulong)(running / divisor);
-        running %= divisor;
+        running -= (UInt128)limb0 * divisor;
 
         remainder = (ulong)running;
         return new UInt256(limb3, limb2, limb1, limb0);
@@ -365,13 +389,42 @@ internal readonly struct UInt256 : IEquatable<UInt256>, IComparable<UInt256>
         // A value inside 128 bits is divided there, in one step. The loop below costs a
         // 128-by-64 division per limb per chunk of nineteen digits, and every coefficient
         // reaching this before an operation has widened it fits the narrower type.
+        if (power <= 0)
+        {
+            hasRemainder = false;
+            return value;
+        }
+
         if (value.FitsUInt128 && power <= PowersOfTen.MaxUInt128Power)
         {
             var narrow = value.ToUInt128();
-            var divisor = PowersOfTen.UInt128(power);
-            var narrowQuotient = narrow / divisor;
-            hasRemainder = narrow != narrowQuotient * divisor;
+            var reciprocal = PowersOfTen.Reciprocal(power);
+            var narrowQuotient = reciprocal.Divide(narrow);
+            hasRemainder = narrow != narrowQuotient * reciprocal.PowerOfTen;
             return new UInt256(narrowQuotient);
+        }
+
+        // Wider than 128 bits, but usually not by much: the widest intermediate the
+        // arithmetic produces is around forty digits. Since 10^p is 2^p times 5^p, and
+        // floor(floor(n/a)/b) is floor(n/ab), shifting right by p first is exact -- and it
+        // takes p bits off the value, which is normally enough to bring it inside 128 bits
+        // where one division finishes the job instead of three. The divisor comes free:
+        // 10^p shifted right by p is 5^p.
+        if (power <= PowersOfTen.MaxUInt128Power)
+        {
+            var shifted = value >> power;
+            if (shifted.FitsUInt128)
+            {
+                var narrow = shifted.ToUInt128();
+                var five = PowersOfTen.UInt128(power) >> power;
+                var narrowQuotient = narrow / five;
+
+                // Something was discarded if the shifted division left a remainder, or if
+                // the shift itself dropped a set bit.
+                hasRemainder = narrow != narrowQuotient * five
+                    || value != (shifted << power);
+                return new UInt256(narrowQuotient);
+            }
         }
 
         hasRemainder = false;
@@ -387,6 +440,7 @@ internal readonly struct UInt256 : IEquatable<UInt256>, IComparable<UInt256>
 
         return quotient;
     }
+
 
     /// <summary>
     /// Multiplies by 10^<paramref name="power"/>. The caller is responsible for knowing the

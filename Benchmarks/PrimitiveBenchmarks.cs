@@ -141,6 +141,50 @@ public class PrimitiveBenchmarks
         return result;
     }
 
+    /// <summary>The same division as a multiply, which is what the rounding path now does.</summary>
+    [BenchmarkCategory("divide")]
+    [Benchmark(OperationsPerInvoke = Count)]
+    public UInt128 DivideUInt128ByReciprocal()
+    {
+        var result = UInt128.Zero;
+        for (var index = 0; index < Count; index++)
+        {
+            result = PowersOfTen.DivideByPowerOfTen(_coefficients[index], 8);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// And at a power past 64 bits, where the divisor no longer fits a machine word and the
+    /// software division has the furthest to fall.
+    /// </summary>
+    [BenchmarkCategory("divide")]
+    [Benchmark(OperationsPerInvoke = Count)]
+    public UInt128 DivideUInt128ByWidePowerOfTen()
+    {
+        var result = UInt128.Zero;
+        for (var index = 0; index < Count; index++)
+        {
+            result = _wideIntermediates[index].ToUInt128() / PowersOfTen.UInt128(20);
+        }
+
+        return result;
+    }
+
+    [BenchmarkCategory("divide")]
+    [Benchmark(OperationsPerInvoke = Count)]
+    public UInt128 DivideUInt128ByWideReciprocal()
+    {
+        var result = UInt128.Zero;
+        for (var index = 0; index < Count; index++)
+        {
+            result = PowersOfTen.DivideByPowerOfTen(_wideIntermediates[index].ToUInt128(), 20);
+        }
+
+        return result;
+    }
+
     /// <summary>The same division at 64 bits, where the processor has an instruction.</summary>
     [BenchmarkCategory("divide")]
     [Benchmark(OperationsPerInvoke = Count)]

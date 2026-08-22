@@ -305,18 +305,22 @@ Nanoseconds per operation, same machine, same values, BenchmarkDotNet's default 
 
 | operation | `Decimal64` | `decDouble` | ratio |
 | --- | --- | --- | --- |
-| add | 70.3 | 41.7 | 1.69x |
-| multiply | 52.1 | 36.7 | 1.42x |
-| divide | 118.3 | 120.4 | 0.98x |
-| fma | 106.6 | 89.0 | 1.20x |
-| compare | 12.0 | 12.3 | 0.97x |
-| to string | 61.1 | 10.3 | 5.93x |
-| from string | 54.2 | 27.8 | 1.95x |
+| add | 60.5 | 42.3 | 1.43x |
+| multiply | 47.9 | 35.1 | 1.36x |
+| divide | 120.3 | 119.7 | 1.01x |
+| fma | 96.5 | 88.5 | 1.09x |
+| compare | 12.1 | 12.5 | 0.97x |
+| to string | 63.6 | 10.3 | 6.17x |
+| from string | 54.3 | 28.1 | 1.93x |
 
-Broadly: managed code lands within about 1.2x to 1.7x of optimized C on arithmetic, matches
-it on divide, and beats it on compare -- the last because classification and sign handling
-read the packed bits without ever unpacking the coefficient. `Decimal128` is 1.5x to 2x
-against `decQuad` on the same operations.
+Broadly: managed code lands within about 1.1x to 1.4x of optimized C on arithmetic, and
+matches it on divide and compare -- the latter because classification and sign handling read
+the packed bits without ever unpacking the coefficient. `Decimal128` runs 1.1x to 1.8x
+against `decQuad`, and is faster than it on multiply.
+
+The C figures are medians of several runs. `decbench` times one pass per operation with no
+warmup or statistics, and its longer rows vary by a good deal more between runs than the
+managed numbers beside them do, so read a ratio within about ten percent of another as a tie.
 
 Formatting is the outlier at roughly 6x, and the reason is known rather than mysterious:
 decNumber emits three digits at a time from its declet tables, and this still divides the

@@ -41,8 +41,11 @@ internal static class DecimalRounder
         }
         else
         {
-            var power = PowersOfTen.UInt128(discardedDigits);
-            quotient = coefficient / power;
+            // One table read, not two: the reciprocal carries the power it divides by, and
+            // rounding needs both.
+            var reciprocal = PowersOfTen.Reciprocal(discardedDigits);
+            var power = reciprocal.PowerOfTen;
+            quotient = reciprocal.Divide(coefficient);
             remainder = coefficient - (quotient * power);
             half = power >> 1;
         }

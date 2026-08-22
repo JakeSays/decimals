@@ -30,11 +30,17 @@ public static class BenchmarkValues
     /// <summary>Operands per measured loop, a power of two so the wrap is a mask.</summary>
     public const int Count = 1024;
 
+    /// <summary>The width of a Decimal128 coefficient.</summary>
+    private const int FullWidthDigits = 34;
+
     static BenchmarkValues()
     {
         WideText = BuildText(40);
         NarrowText = BuildNarrowText();
         ModerateText = BuildModerateText();
+        FullWidthText = BuildFullWidthText();
+
+        FullWidth128 = new Decimal128[Count];
 
         Wide32 = new Decimal32[Count];
         Wide64 = new Decimal64[Count];
@@ -50,6 +56,7 @@ public static class BenchmarkValues
             Wide32[index] = Decimal32.Parse(WideText[index]);
             Wide64[index] = Decimal64.Parse(WideText[index]);
             Wide128[index] = Decimal128.Parse(WideText[index]);
+            FullWidth128[index] = Decimal128.Parse(FullWidthText[index]);
 
             Narrow64[index] = Decimal64.Parse(NarrowText[index]);
             NarrowDecimal[index] = decimal.Parse(NarrowText[index],
@@ -64,6 +71,10 @@ public static class BenchmarkValues
     }
 
     public static string[] WideText { get; }
+
+    public static string[] FullWidthText { get; }
+
+    public static Decimal128[] FullWidth128 { get; }
 
     public static string[] NarrowText { get; }
 
@@ -129,6 +140,26 @@ public static class BenchmarkValues
             // The exponent is set from the digit count so that the value lands between a
             // thousandth and a thousand however long its coefficient is.
             var exponent = random.Next(-3, 4) - (digits.Length - 1);
+            values[index] = digits + "E" + exponent.ToString(CultureInfo.InvariantCulture);
+        }
+
+        return values;
+    }
+
+    /// <summary>
+    /// Decimal128 operands at the full width of its coefficient. The wide set tops out at
+    /// sixteen digits, whose products still fit thirty-four and so never round; these do,
+    /// which is the only way to see the format carry out the work it skips there.
+    /// </summary>
+    private static string[] BuildFullWidthText()
+    {
+        var random = new Random(20260818);
+        var values = new string[Count];
+
+        for (var index = 0; index < Count; index++)
+        {
+            var digits = BuildDigits(random, FullWidthDigits);
+            var exponent = random.Next(-40, 41);
             values[index] = digits + "E" + exponent.ToString(CultureInfo.InvariantCulture);
         }
 
