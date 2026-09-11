@@ -8,16 +8,28 @@ namespace Decimals;
 /// testcase corpus lists, and the bits decimal hardware consumes.
 /// </summary>
 /// <remarks>
-/// This sits at the interchange boundary rather than on any arithmetic path, so it is
-/// written for clarity: the three formats share one routine and pay for a few wide shifts.
+/// <para>
 /// The layout is a sign bit, a five-bit combination field carrying the exponent's top two
 /// bits and the leading coefficient digit, an exponent continuation field, and the
 /// remaining coefficient digits as ten-bit declets.
+/// </para>
+/// <para>
+/// This produces an integer coefficient, which is what the operations still working on one
+/// need. That makes it their decode rather than an interchange convenience, so the
+/// gathering below is written for the cost rather than for the reading of it.
+/// <see cref="BcdCodec"/> is the path that never forms an integer at all.
+/// </para>
 /// </remarks>
 internal static class DpdCodec
 {
     private const uint InfinityCombination = 0x1E;
     private const uint NaNCombination = 0x1F;
+
+    /// <summary>Declets gathered into the low half, which is eighteen digits.</summary>
+    private const int LowDeclets = 6;
+
+    /// <summary>The power of ten separating the two halves.</summary>
+    private const ulong HalfSplit = 1000000000000000000;
 
     public static UnpackedDecimal<uint> Decode32(uint bits)
     {
@@ -72,7 +84,7 @@ internal static class DpdCodec
             // signaling one; the rest of the continuation field carries nothing.
             var isSignaling = (continuation >> (TFormat.ExponentContinuationBits - 1)) != 0;
             var kind = isSignaling ? DecimalKind.SignalingNaN : DecimalKind.QuietNaN;
-            return new UnpackedDecimal<UInt128>(kind, isNegative, 0, ReadDeclets<TFormat>(bits, UInt128.Zero));
+            return new UnpackedDecimal<UInt128>(kind, isNegative, 0, ReadDeclets<TFormat>(bits, 0));
         }
 
         uint exponentHigh;
@@ -131,31 +143,82 @@ internal static class DpdCodec
             | declets;
     }
 
-    private static UInt128 ReadDeclets<TFormat>(UInt128 bits, UInt128 leadingDigit)
+    /// <summary>
+    /// Builds the coefficient from the declets.
+    /// </summary>
+    /// <remarks>
+    /// The width is a compile-time constant of the instantiation, so the narrow formats
+    /// fold to a machine-word accumulator and never touch 128-bit arithmetic. Decimal128
+    /// gathers its two halves separately and joins them with one multiply, rather than
+    /// widening the accumulator once per declet.
+    /// </remarks>
+    private static UInt128 ReadDeclets<TFormat>(UInt128 bits, uint leadingDigit)
         where TFormat : IDecimalFormat
     {
-        var coefficient = leadingDigit;
-        for (var declet = TFormat.DecletCount - 1; declet >= 0; declet--)
+        if (TFormat.Precision <= 19)
         {
-            var packed = (uint)(bits >> (declet * 10)) & 0x3FF;
-            coefficient = (coefficient * 1000) + Dpd.ToBinary(packed);
+            var narrow = (ulong)leadingDigit;
+            for (var declet = TFormat.DecletCount - 1; declet >= 0; declet--)
+            {
+                narrow = (narrow * 1000) + Dpd.ToBinary((uint)(bits >> (declet * 10)) & 0x3FF);
+            }
+
+            return narrow;
         }
 
-        return coefficient;
+        var high = (ulong)leadingDigit;
+        for (var declet = TFormat.DecletCount - 1; declet >= LowDeclets; declet--)
+        {
+            high = (high * 1000) + Dpd.ToBinary((uint)(bits >> (declet * 10)) & 0x3FF);
+        }
+
+        var low = 0UL;
+        for (var declet = LowDeclets - 1; declet >= 0; declet--)
+        {
+            low = (low * 1000) + Dpd.ToBinary((uint)(bits >> (declet * 10)) & 0x3FF);
+        }
+
+        return ((UInt128)high * HalfSplit) + low;
     }
 
+    /// <summary>
+    /// Lays the coefficient out as declets, splitting the same way the read joins: one
+    /// 128-bit division rather than one per declet.
+    /// </summary>
     private static UInt128 WriteDeclets<TFormat>(UInt128 coefficient, out uint leadingDigit)
         where TFormat : IDecimalFormat
     {
         var bits = UInt128.Zero;
-        for (var declet = 0; declet < TFormat.DecletCount; declet++)
+
+        if (TFormat.Precision <= 19)
         {
-            var group = (uint)(coefficient % 1000);
-            coefficient /= 1000;
-            bits |= (UInt128)Dpd.ToDeclet(group) << (declet * 10);
+            var narrow = (ulong)coefficient;
+            for (var declet = 0; declet < TFormat.DecletCount; declet++)
+            {
+                bits |= (UInt128)Dpd.ToDeclet((uint)(narrow % 1000)) << (declet * 10);
+                narrow /= 1000;
+            }
+
+            leadingDigit = (uint)narrow;
+            return bits;
         }
 
-        leadingDigit = (uint)coefficient;
+        var low = (ulong)(coefficient % HalfSplit);
+        var high = (ulong)(coefficient / HalfSplit);
+
+        for (var declet = 0; declet < LowDeclets; declet++)
+        {
+            bits |= (UInt128)Dpd.ToDeclet((uint)(low % 1000)) << (declet * 10);
+            low /= 1000;
+        }
+
+        for (var declet = LowDeclets; declet < TFormat.DecletCount; declet++)
+        {
+            bits |= (UInt128)Dpd.ToDeclet((uint)(high % 1000)) << (declet * 10);
+            high /= 1000;
+        }
+
+        leadingDigit = (uint)high;
         return bits;
     }
 }

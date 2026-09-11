@@ -9,7 +9,8 @@ namespace Decimals.Benchmarks;
 /// <summary>
 /// The square root and the four functions that go through the arbitrary-precision engine.
 /// This is the run that says what that engine costs: the square root works on the format's
-/// own coefficient, while exp, log, and pow evaluate on <c>BigDecimal</c> and allocate.
+/// own coefficient, while exp, log, and pow evaluate on <c>WideNumber</c>, whose buffers
+/// come off the stack.
 /// </summary>
 /// <remarks>
 /// <para>

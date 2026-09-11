@@ -17,7 +17,7 @@ namespace Decimals;
 /// the only reading of a <see cref="double"/> that means what the writer wrote:
 /// <c>0.1</c> becomes the decimal 0.1, not the binary fraction nearest to it.
 /// </remarks>
-internal static class DecimalConversions<TFormat, TBits>
+internal static unsafe class DecimalConversions<TFormat, TBits>
     where TFormat : IDecimalFormat<TBits>
     where TBits : IBinaryInteger<TBits>, IUnsignedNumber<TBits>
 {
@@ -159,42 +159,115 @@ internal static class DecimalConversions<TFormat, TBits>
         }
 
         // Everything else is an integer type, so the value is truncated toward zero and
-        // handed over as a BigInteger for the target to narrow however it was asked to.
-        var whole = ToBigInteger(unpacked);
-        value = TOther.CreateSaturating(whole);
+        // clamped into whatever range the target has.
+        value = ToIntegerSaturating<TOther>(unpacked);
         return true;
     }
 
-    private static BigInteger ToBigInteger(UnpackedDecimal<UInt128> value)
+    /// <summary>
+    /// The magnitude of the value truncated toward zero.
+    /// </summary>
+    /// <remarks>
+    /// Every integer type .NET builds in fits 128 bits, so a magnitude past that cannot be
+    /// held by any of them and the flag is all a caller needs: it saturates or throws
+    /// without having to know how far past it went.
+    /// </remarks>
+    private static bool TryTruncate(UnpackedDecimal<UInt128> value, out UInt128 magnitude)
     {
-        var magnitude = (BigInteger)value.Coefficient;
-        if (value.Exponent > 0)
+        magnitude = value.Coefficient;
+
+        if (value.Exponent < 0)
         {
-            magnitude *= BigInteger.Pow(10, value.Exponent);
-        }
-        else if (value.Exponent < 0)
-        {
-            magnitude /= BigInteger.Pow(10, -value.Exponent);
+            var drop = -value.Exponent;
+            magnitude = drop > PowersOfTen.MaxUInt128Power
+                ? UInt128.Zero
+                : magnitude / PowersOfTen.UInt128(drop);
+
+            return true;
         }
 
-        return value.IsNegative ? -magnitude : magnitude;
+        if (value.Exponent == 0)
+        {
+            return true;
+        }
+
+        if (value.Exponent > PowersOfTen.MaxUInt128Power)
+        {
+            return false;
+        }
+
+        var scale = PowersOfTen.UInt128(value.Exponent);
+        if (magnitude != UInt128.Zero && UInt128.MaxValue / scale < magnitude)
+        {
+            return false;
+        }
+
+        magnitude *= scale;
+        return true;
     }
 
+    /// <summary>The magnitude at which a negative value stops fitting any signed type.</summary>
+    private static UInt128 NegativeLimit => (UInt128)Int128.MaxValue + UInt128.One;
+
     /// <summary>
-    /// The value as a whole number, truncated toward zero, which is what a cast to an
-    /// integer type asks for. The caller decides what to do when it does not fit.
+    /// The value as a whole number, truncated toward zero and narrowed into the target,
+    /// which is what a cast to an integer type asks for. A value the target cannot hold
+    /// throws, as a checked conversion does.
     /// </summary>
-    public static BigInteger ToInteger(TBits bits)
+    public static TInteger ToInteger<TInteger>(TBits bits)
+        where TInteger : INumberBase<TInteger>
     {
         var value = TFormat.Unpack(bits);
         if (value.Kind != DecimalKind.Finite)
         {
-            // The same answer System.Decimal gives for a value it cannot hold, and a
-            // better one than the zero a NaN's empty coefficient would otherwise produce.
+            // The same answer System.Decimal gives for a value it cannot hold, and a better
+            // one than the zero a NaN's empty coefficient would otherwise produce.
             throw new OverflowException("A NaN or an infinity has no integer value.");
         }
 
-        return ToBigInteger(value);
+        if (!TryTruncate(value, out var magnitude))
+        {
+            throw new OverflowException("The value is too large for the target type.");
+        }
+
+        if (!value.IsNegative)
+        {
+            return TInteger.CreateChecked(magnitude);
+        }
+
+        if (magnitude > NegativeLimit)
+        {
+            throw new OverflowException("The value is too large for the target type.");
+        }
+
+        var signed = magnitude == NegativeLimit ? Int128.MinValue : -(Int128)magnitude;
+        return TInteger.CreateChecked(signed);
+    }
+
+    /// <summary>
+    /// The same conversion, clamped to the target's range rather than throwing.
+    /// </summary>
+    public static TInteger ToIntegerSaturating<TInteger>(UnpackedDecimal<UInt128> value)
+        where TInteger : INumberBase<TInteger>?
+    {
+        if (!TryTruncate(value, out var magnitude))
+        {
+            return value.IsNegative
+                ? TInteger.CreateSaturating(Int128.MinValue)
+                : TInteger.CreateSaturating(UInt128.MaxValue);
+        }
+
+        if (!value.IsNegative)
+        {
+            return TInteger.CreateSaturating(magnitude);
+        }
+
+        if (magnitude >= NegativeLimit)
+        {
+            return TInteger.CreateSaturating(Int128.MinValue);
+        }
+
+        return TInteger.CreateSaturating(-(Int128)magnitude);
     }
 
     /// <summary>
@@ -304,37 +377,108 @@ internal static class DecimalConversions<TFormat, TBits>
         var rawMantissa = bits & 0xF_FFFF_FFFF_FFFF;
 
         // A subnormal has no hidden bit and a fixed exponent; everything else carries one.
-        var mantissa = rawExponent == 0 ? (BigInteger)rawMantissa : rawMantissa | (1UL << 52);
+        var mantissa = rawExponent == 0 ? rawMantissa : rawMantissa | (1UL << 52);
         var exponent = rawExponent == 0 ? -1074 : rawExponent - 1075;
 
-        BigInteger coefficient;
+        // Room for the widest exact form a double has: 5**1074 runs to 751 digits, and the
+        // mantissa adds sixteen more.
+        var units = stackalloc uint[ExactBinaryUnits];
+        var length = 0;
+        var remaining = mantissa;
+
+        do
+        {
+            units[length] = (uint)(remaining % WideNumber.UnitBase);
+            remaining /= WideNumber.UnitBase;
+            length++;
+        }
+        while (remaining != 0);
+
         int scale;
         if (exponent >= 0)
         {
-            coefficient = mantissa << exponent;
+            // Two to the power, a unit at a time: 2**29 is the largest that fits one, so
+            // this is a few dozen passes rather than a wide exponentiation.
+            length = RaiseBySmallSteps(units, length, 2, TwosPerStep, exponent);
             scale = 0;
         }
         else
         {
             // m * 2**-k is m * 5**k * 10**-k, which is exact and needs no division.
-            coefficient = mantissa * BigInteger.Pow(5, -exponent);
+            length = RaiseBySmallSteps(units, length, 5, FivesPerStep, -exponent);
             scale = exponent;
+        }
 
-            // That form carries trailing zeros whenever the mantissa is even, and they say
-            // nothing: 2.5 would arrive as 2.500000000000000000000000000000000. Strip them
-            // back to the shortest form that still holds the value exactly, stopping at a
-            // zero exponent so an integer stays written out.
-            while (scale < 0 && (coefficient % 10).IsZero)
-            {
-                coefficient /= 10;
-                scale++;
-            }
+        var value = default(WideNumber);
+        value.Lsu = units;
+        value.Units = length;
+        value.Kind = DecimalKind.Finite;
+        value.IsNegative = isNegative;
+        value.Exponent = scale;
+        value.CountDigits();
+
+        // The exact form carries trailing zeros whenever the mantissa is even, and they say
+        // nothing: 2.5 would arrive as 2.500000000000000000000000000000000. Strip them back
+        // to the shortest form that still holds the value exactly, stopping at a zero
+        // exponent so an integer stays written out.
+        while (value.Exponent < 0
+            && WideUnits.DigitAt(value.Lsu, value.Units, 0) == 0
+            && !value.IsZero)
+        {
+            value.Units = WideUnits.ShiftDown(value.Lsu, value.Units, 1);
+            value.Exponent++;
+            value.CountDigits();
         }
 
         var status = DecimalStatus.None;
-        var value = new BigDecimal(DecimalKind.Finite, isNegative, scale, coefficient);
-        var context = BigDecimalContext.ForFormat<TFormat>(DecimalRounding.HalfEven);
-        return TFormat.Pack(BigDecimal.Round(value, context, ref status).ToUnpacked());
+        var context = WideContext.ForFormat<TFormat>(DecimalRounding.HalfEven);
+        var residue = 0;
+
+        WideRounding.SetCoefficient(ref value, context.Digits, ref residue, ref status);
+        WideRounding.Finalize(ref value, residue, context, ref status);
+
+        return TFormat.Pack(value.ToUnpacked());
+    }
+
+    /// <summary>
+    /// Units the exact decimal form of a double needs: 5**1074 is 751 digits and the
+    /// mantissa contributes sixteen more.
+    /// </summary>
+    private const int ExactBinaryUnits = 96;
+
+    /// <summary>Twos that fit one unit: 2**29 is under a billion, 2**30 is not.</summary>
+    private const int TwosPerStep = 29;
+
+    /// <summary>Fives that fit one unit: 5**12 is under a billion, 5**13 is not.</summary>
+    private const int FivesPerStep = 12;
+
+    /// <summary>
+    /// Multiplies by a base raised to a power, in steps small enough that each multiplier
+    /// fits a single unit. Building the power itself would need an intermediate far wider
+    /// than the answer.
+    /// </summary>
+    private static int RaiseBySmallSteps(uint* units, int length, uint value, int perStep,
+        int power)
+    {
+        var stepMultiplier = 1u;
+        for (var index = 0; index < perStep; index++)
+        {
+            stepMultiplier *= value;
+        }
+
+        while (power >= perStep)
+        {
+            length = WideUnits.MultiplyBySmall(units, length, stepMultiplier);
+            power -= perStep;
+        }
+
+        var remainderMultiplier = 1u;
+        for (var index = 0; index < power; index++)
+        {
+            remainderMultiplier *= value;
+        }
+
+        return WideUnits.MultiplyBySmall(units, length, remainderMultiplier);
     }
 
     private static TBits FromBinarySpecial(bool isNaN, bool isNegative)

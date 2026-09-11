@@ -48,17 +48,21 @@ internal readonly struct Decimal32Format : IDecimalFormat<uint>
 
     public static UnpackedDecimal<UInt128> Unpack(uint bits)
     {
-        var value = BidCodec.Decode32(bits);
+        var value = DpdCodec.Decode32(bits);
         return new UnpackedDecimal<UInt128>(value.Kind, value.IsNegative, value.Exponent, value.Coefficient);
     }
 
     public static uint Pack(UnpackedDecimal<UInt128> value)
     {
-        return BidCodec.Encode32(new UnpackedDecimal<uint>(
+        return DpdCodec.Encode32(new UnpackedDecimal<uint>(
             value.Kind, value.IsNegative, value.Exponent, (uint)value.Coefficient));
     }
 
-    public static uint FromDpd(uint bits) => BidCodec.Encode32(DpdCodec.Decode32(bits));
+    public static uint FromDpd(uint bits) => bits;
 
-    public static uint ToDpd(uint bits) => DpdCodec.Encode32(BidCodec.Decode32(bits));
+    public static uint ToDpd(uint bits) => bits;
+
+    public static uint FromBid(uint bits) => DpdCodec.Encode32(BidCodec.Decode32(bits));
+
+    public static uint ToBid(uint bits) => BidCodec.Encode32(DpdCodec.Decode32(bits));
 }

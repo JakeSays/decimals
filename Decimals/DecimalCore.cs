@@ -3,6 +3,7 @@
 
 using System.Globalization;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 
 namespace Decimals;
 
@@ -12,7 +13,8 @@ namespace Decimals;
 /// <see cref="Decimal128"/> are thin forwarders onto this; nothing but width-specific
 /// constants lives outside it.
 /// </summary>
-internal static class DecimalCore<TFormat, TBits>
+[SkipLocalsInit]
+internal static unsafe class DecimalCore<TFormat, TBits>
     where TFormat : IDecimalFormat<TBits>
     where TBits : IBinaryInteger<TBits>, IUnsignedNumber<TBits>
 {
@@ -50,8 +52,12 @@ internal static class DecimalCore<TFormat, TBits>
     public static bool IsZero(TBits bits) =>
         IsFinite(bits) && TFormat.Unpack(bits).Coefficient == UInt128.Zero;
 
-    public static bool IsSubnormal(TBits bits) =>
-        DecimalOperations.IsSubnormal<TFormat>(TFormat.Unpack(bits));
+    public static bool IsSubnormal(TBits bits)
+    {
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+        return BcdOperations.IsSubnormal<TFormat>(ToWide(bits), ref work);
+    }
 
     public static bool IsNormal(TBits bits) => IsFinite(bits) && !IsZero(bits) && !IsSubnormal(bits);
 
@@ -61,8 +67,20 @@ internal static class DecimalCore<TFormat, TBits>
     /// </summary>
     public static bool IsCanonical(TBits bits) => bits == TFormat.Pack(TFormat.Unpack(bits));
 
-    public static DecimalClass Classify(TBits bits) =>
-        DecimalOperations.Classify<TFormat>(TFormat.Unpack(bits));
+    /// <summary>
+    /// The canonical encoding of the same value. Twenty-four of the thousand-and-twenty-four
+    /// declets are non-canonical -- they carry three digits another declet also carries --
+    /// and a stored encoding may hold them, since the storage is the interchange form. This
+    /// decodes to the value and writes it back the one canonical way.
+    /// </summary>
+    public static TBits Canonical(TBits bits) => TFormat.Pack(TFormat.Unpack(bits));
+
+    public static DecimalClass Classify(TBits bits)
+    {
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+        return BcdOperations.Classify<TFormat>(ToWide(bits), ref work);
+    }
 
     // The copy family, defined on the bits rather than on the value: quiet, and never
     // signals even for a signaling NaN.
@@ -88,11 +106,19 @@ internal static class DecimalCore<TFormat, TBits>
         return first.Exponent == second.Exponent;
     }
 
-    public static int CompareTotal(TBits left, TBits right) =>
-        DecimalOperations.CompareTotal(TFormat.Unpack(left), TFormat.Unpack(right));
+    public static int CompareTotal(TBits left, TBits right)
+    {
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+        return BcdOperations.CompareTotal<TFormat>(ToWide(left), ToWide(right), ref work);
+    }
 
-    public static int CompareTotalMagnitude(TBits left, TBits right) =>
-        DecimalOperations.CompareTotalMagnitude(TFormat.Unpack(left), TFormat.Unpack(right));
+    public static int CompareTotalMagnitude(TBits left, TBits right)
+    {
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+        return BcdOperations.CompareTotalMagnitude<TFormat>(ToWide(left), ToWide(right), ref work);
+    }
 
     // Text.
 
@@ -168,103 +194,159 @@ internal static class DecimalCore<TFormat, TBits>
     public static string ToEngineeringString(TBits bits) =>
         DecimalFormatter.ToEngineeringString(TFormat.Unpack(bits));
 
-    // Arithmetic.
+    // Arithmetic. These work on the digit form, which is what the stored encoding takes
+    // apart into: scaling a coefficient by a power of ten is a move of the digit window
+    // rather than a multiply or a divide, and scaling is most of what these do.
+
+    // The scratch every operation works in is stack-allocated at the entry point and handed
+    // down. Nothing in it is initialized on the way in -- every buffer is written before it
+    // is read -- which is what the class's SkipLocalsInit is for.
 
     public static TBits Add(TBits left, TBits right, ref DecimalContext context)
     {
         var status = context.Status;
-        var result = DecimalArithmetic.Add<TFormat>(
-            TFormat.Unpack(left), TFormat.Unpack(right), context.Rounding, ref status);
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+
+        var result = BcdOperations.Add<TFormat>(ToWide(left), ToWide(right),
+            context.Rounding, ref status, ref work);
+
         context.Status = status;
-        return TFormat.Pack(result);
+        return FromWide(result);
     }
 
     public static TBits Subtract(TBits left, TBits right, ref DecimalContext context)
     {
         var status = context.Status;
-        var result = DecimalArithmetic.Subtract<TFormat>(
-            TFormat.Unpack(left), TFormat.Unpack(right), context.Rounding, ref status);
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+
+        var result = BcdOperations.Subtract<TFormat>(ToWide(left), ToWide(right),
+            context.Rounding, ref status, ref work);
+
         context.Status = status;
-        return TFormat.Pack(result);
+        return FromWide(result);
     }
 
     public static TBits Multiply(TBits left, TBits right, ref DecimalContext context)
     {
         var status = context.Status;
-        var result = DecimalArithmetic.Multiply<TFormat>(
-            TFormat.Unpack(left), TFormat.Unpack(right), context.Rounding, ref status);
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+
+        var result = BcdOperations.Multiply<TFormat>(ToWide(left), ToWide(right),
+            context.Rounding, ref status, ref work);
+
         context.Status = status;
-        return TFormat.Pack(result);
+        return FromWide(result);
     }
 
     public static TBits Divide(TBits left, TBits right, ref DecimalContext context)
     {
         var status = context.Status;
-        var result = DecimalArithmetic.Divide<TFormat>(
-            TFormat.Unpack(left), TFormat.Unpack(right), context.Rounding, ref status);
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+
+        var result = BcdOperations.Divide<TFormat>(ToWide(left), ToWide(right),
+            context.Rounding, ref status, ref work);
+
         context.Status = status;
-        return TFormat.Pack(result);
+        return FromWide(result);
     }
+
+    /// <summary>
+    /// The stored encoding widened to the one the digit codec reads. Every format's bits
+    /// fit 128, so this loses nothing.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static UInt128 ToWide(TBits bits) => UInt128.CreateTruncating(bits);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static TBits FromWide(UInt128 bits) => TBits.CreateTruncating(bits);
 
     public static TBits DivideInteger(TBits left, TBits right, ref DecimalContext context)
     {
         var status = context.Status;
-        var result = DecimalArithmetic.DivideInteger<TFormat>(
-            TFormat.Unpack(left), TFormat.Unpack(right), context.Rounding, ref status);
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+
+        var result = BcdOperations.DivideInteger<TFormat>(ToWide(left), ToWide(right),
+            context.Rounding, ref status, ref work);
+
         context.Status = status;
-        return TFormat.Pack(result);
+        return FromWide(result);
     }
 
     public static TBits Remainder(TBits left, TBits right, ref DecimalContext context)
     {
         var status = context.Status;
-        var result = DecimalArithmetic.Remainder<TFormat>(
-            TFormat.Unpack(left), TFormat.Unpack(right), context.Rounding, ref status);
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+
+        var result = BcdOperations.Remainder<TFormat>(ToWide(left), ToWide(right),
+            context.Rounding, ref status, ref work);
+
         context.Status = status;
-        return TFormat.Pack(result);
+        return FromWide(result);
     }
 
     public static TBits RemainderNear(TBits left, TBits right, ref DecimalContext context)
     {
         var status = context.Status;
-        var result = DecimalArithmetic.RemainderNear<TFormat>(
-            TFormat.Unpack(left), TFormat.Unpack(right), context.Rounding, ref status);
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+
+        var result = BcdOperations.RemainderNear<TFormat>(ToWide(left), ToWide(right),
+            context.Rounding, ref status, ref work);
+
         context.Status = status;
-        return TFormat.Pack(result);
+        return FromWide(result);
     }
 
     public static TBits FusedMultiplyAdd(TBits left, TBits right, TBits addend, ref DecimalContext context)
     {
         var status = context.Status;
-        var result = DecimalArithmetic.FusedMultiplyAdd<TFormat>(
-            TFormat.Unpack(left), TFormat.Unpack(right), TFormat.Unpack(addend),
-            context.Rounding, ref status);
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+
+        var result = BcdOperations.FusedMultiplyAdd<TFormat>(ToWide(left), ToWide(right),
+            ToWide(addend), context.Rounding, ref status, ref work);
+
         context.Status = status;
-        return TFormat.Pack(result);
+        return FromWide(result);
     }
 
     public static TBits Plus(TBits value, ref DecimalContext context)
     {
         var status = context.Status;
-        var result = DecimalArithmetic.Plus<TFormat>(TFormat.Unpack(value), context.Rounding, ref status);
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+
+        var result = BcdOperations.Plus<TFormat>(ToWide(value), context.Rounding, ref status, ref work);
         context.Status = status;
-        return TFormat.Pack(result);
+        return FromWide(result);
     }
 
     public static TBits Minus(TBits value, ref DecimalContext context)
     {
         var status = context.Status;
-        var result = DecimalArithmetic.Minus<TFormat>(TFormat.Unpack(value), context.Rounding, ref status);
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+
+        var result = BcdOperations.Minus<TFormat>(ToWide(value), context.Rounding, ref status, ref work);
         context.Status = status;
-        return TFormat.Pack(result);
+        return FromWide(result);
     }
 
     public static TBits Abs(TBits value, ref DecimalContext context)
     {
         var status = context.Status;
-        var result = DecimalArithmetic.Abs<TFormat>(TFormat.Unpack(value), context.Rounding, ref status);
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+
+        var result = BcdOperations.Abs<TFormat>(ToWide(value), context.Rounding, ref status, ref work);
         context.Status = status;
-        return TFormat.Pack(result);
+        return FromWide(result);
     }
 
     /// <summary>
@@ -274,73 +356,102 @@ internal static class DecimalCore<TFormat, TBits>
     public static TBits Compare(TBits left, TBits right, bool signaling, ref DecimalContext context)
     {
         var status = context.Status;
-        var comparison = DecimalArithmetic.Compare(
-            TFormat.Unpack(left), TFormat.Unpack(right), signaling, ref status, out var nan);
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+
+        var comparison = BcdOperations.Compare<TFormat>(ToWide(left), ToWide(right), signaling,
+            ref status, out var nan, ref work);
+
         context.Status = status;
 
-        if (comparison is null)
+        if (comparison == int.MinValue)
         {
-            return TFormat.Pack(nan);
+            return FromWide(nan);
         }
 
-        return comparison.Value < 0 ? NegativeOne : (comparison.Value > 0 ? One : Zero);
+        return comparison < 0 ? NegativeOne : (comparison > 0 ? One : Zero);
     }
 
     // Digit-wise logical operations, which read the coefficient as ones and zeros.
 
-    public static TBits And(TBits left, TBits right, ref DecimalContext context) =>
-        Run(DecimalLogical.And<TFormat>, left, right, ref context);
+    public static TBits And(TBits left, TBits right, ref DecimalContext context)
+    {
+        var status = context.Status;
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
 
-    public static TBits Or(TBits left, TBits right, ref DecimalContext context) =>
-        Run(DecimalLogical.Or<TFormat>, left, right, ref context);
+        var result = BcdOperations.And<TFormat>(ToWide(left), ToWide(right), ref status, ref work);
+        context.Status = status;
+        return FromWide(result);
+    }
 
-    public static TBits Xor(TBits left, TBits right, ref DecimalContext context) =>
-        Run(DecimalLogical.Xor<TFormat>, left, right, ref context);
+    public static TBits Or(TBits left, TBits right, ref DecimalContext context)
+    {
+        var status = context.Status;
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+
+        var result = BcdOperations.Or<TFormat>(ToWide(left), ToWide(right), ref status, ref work);
+        context.Status = status;
+        return FromWide(result);
+    }
+
+    public static TBits Xor(TBits left, TBits right, ref DecimalContext context)
+    {
+        var status = context.Status;
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+
+        var result = BcdOperations.Xor<TFormat>(ToWide(left), ToWide(right), ref status, ref work);
+        context.Status = status;
+        return FromWide(result);
+    }
 
     public static TBits Invert(TBits value, ref DecimalContext context)
     {
         var status = context.Status;
-        var result = DecimalLogical.Invert<TFormat>(TFormat.Unpack(value), ref status);
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+
+        var result = BcdOperations.Invert<TFormat>(ToWide(value), ref status, ref work);
         context.Status = status;
-        return TFormat.Pack(result);
+        return FromWide(result);
     }
 
     // Selecting, reshaping, and stepping.
 
     public static TBits Max(TBits left, TBits right, ref DecimalContext context)
     {
-        var status = context.Status;
-        var result = DecimalShaping.Max<TFormat>(
-            TFormat.Unpack(left), TFormat.Unpack(right), context.Rounding, ref status);
-        context.Status = status;
-        return TFormat.Pack(result);
+        return Select(left, right, wantLarger: true, byMagnitude: false, ref context);
     }
 
     public static TBits Min(TBits left, TBits right, ref DecimalContext context)
     {
-        var status = context.Status;
-        var result = DecimalShaping.Min<TFormat>(
-            TFormat.Unpack(left), TFormat.Unpack(right), context.Rounding, ref status);
-        context.Status = status;
-        return TFormat.Pack(result);
+        return Select(left, right, wantLarger: false, byMagnitude: false, ref context);
     }
 
     public static TBits MaxMagnitude(TBits left, TBits right, ref DecimalContext context)
     {
-        var status = context.Status;
-        var result = DecimalShaping.MaxMagnitude<TFormat>(
-            TFormat.Unpack(left), TFormat.Unpack(right), context.Rounding, ref status);
-        context.Status = status;
-        return TFormat.Pack(result);
+        return Select(left, right, wantLarger: true, byMagnitude: true, ref context);
     }
 
     public static TBits MinMagnitude(TBits left, TBits right, ref DecimalContext context)
     {
+        return Select(left, right, wantLarger: false, byMagnitude: true, ref context);
+    }
+
+    private static TBits Select(TBits left, TBits right, bool wantLarger, bool byMagnitude,
+        ref DecimalContext context)
+    {
         var status = context.Status;
-        var result = DecimalShaping.MinMagnitude<TFormat>(
-            TFormat.Unpack(left), TFormat.Unpack(right), context.Rounding, ref status);
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+
+        var result = BcdOperations.Select<TFormat>(ToWide(left), ToWide(right), wantLarger,
+            byMagnitude, ref status, ref work);
+
         context.Status = status;
-        return TFormat.Pack(result);
+        return FromWide(result);
     }
 
     // The IEEE 754 selection operations. They differ from the specification's max and min
@@ -395,33 +506,44 @@ internal static class DecimalCore<TFormat, TBits>
 
     private static bool TryPropagateNaN(TBits left, TBits right, out TBits result)
     {
-        var status = DecimalStatus.None;
-        if (DecimalArithmetic.TryHandleNaN(TFormat.Unpack(left), TFormat.Unpack(right), ref status,
-            out var nan))
+        if (!IsNaN(left) && !IsNaN(right))
         {
-            result = TFormat.Pack(nan);
-            return true;
+            result = default!;
+            return false;
         }
 
-        result = default!;
-        return false;
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+        var status = DecimalStatus.None;
+
+        result = FromWide(BcdOperations.PropagatePairNaN<TFormat>(ToWide(left), ToWide(right),
+            ref status, ref work));
+
+        return true;
     }
 
     public static TBits LogB(TBits value, ref DecimalContext context)
     {
         var status = context.Status;
-        var result = DecimalShaping.LogB<TFormat>(TFormat.Unpack(value), context.Rounding, ref status);
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+
+        var result = BcdOperations.LogB<TFormat>(ToWide(value), context.Rounding, ref status, ref work);
         context.Status = status;
-        return TFormat.Pack(result);
+        return FromWide(result);
     }
 
     public static TBits ScaleB(TBits value, TBits scale, ref DecimalContext context)
     {
         var status = context.Status;
-        var result = DecimalShaping.ScaleB<TFormat>(
-            TFormat.Unpack(value), TFormat.Unpack(scale), context.Rounding, ref status);
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+
+        var result = BcdOperations.ScaleB<TFormat>(ToWide(value), ToWide(scale),
+            context.Rounding, ref status, ref work);
+
         context.Status = status;
-        return TFormat.Pack(result);
+        return FromWide(result);
     }
 
     public static TBits ScaleB(TBits value, int scale)
@@ -455,72 +577,106 @@ internal static class DecimalCore<TFormat, TBits>
     public static TBits Reduce(TBits value, ref DecimalContext context)
     {
         var status = context.Status;
-        var result = DecimalShaping.Reduce<TFormat>(TFormat.Unpack(value), context.Rounding, ref status);
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+
+        var result = BcdOperations.Reduce<TFormat>(ToWide(value), context.Rounding, ref status, ref work);
         context.Status = status;
-        return TFormat.Pack(result);
+        return FromWide(result);
     }
 
-    public static TBits Trim(TBits value) => TFormat.Pack(DecimalShaping.Trim(TFormat.Unpack(value)));
+    public static TBits Trim(TBits value)
+    {
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+        return FromWide(BcdOperations.Trim<TFormat>(ToWide(value), ref work));
+    }
 
     public static TBits ToIntegral(TBits value, bool exact, ref DecimalContext context)
     {
         var status = context.Status;
-        var result = DecimalShaping.ToIntegral<TFormat>(
-            TFormat.Unpack(value), exact, context.Rounding, ref status);
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+
+        var result = BcdOperations.ToIntegral<TFormat>(ToWide(value), exact, context.Rounding,
+            ref status, ref work);
+
         context.Status = status;
-        return TFormat.Pack(result);
+        return FromWide(result);
     }
 
     public static TBits Quantize(TBits value, TBits pattern, ref DecimalContext context)
     {
         var status = context.Status;
-        var result = DecimalShaping.Quantize<TFormat>(
-            TFormat.Unpack(value), TFormat.Unpack(pattern), context.Rounding, ref status);
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+
+        var result = BcdOperations.Quantize<TFormat>(ToWide(value), ToWide(pattern),
+            context.Rounding, ref status, ref work);
+
         context.Status = status;
-        return TFormat.Pack(result);
+        return FromWide(result);
     }
 
     public static TBits Rotate(TBits value, TBits places, ref DecimalContext context)
     {
         var status = context.Status;
-        var result = DecimalShaping.RotateOrShift<TFormat>(
-            TFormat.Unpack(value), TFormat.Unpack(places), true, ref status);
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+
+        var result = BcdOperations.RotateOrShift<TFormat>(ToWide(value), ToWide(places),
+            true, ref status, ref work);
+
         context.Status = status;
-        return TFormat.Pack(result);
+        return FromWide(result);
     }
 
     public static TBits Shift(TBits value, TBits places, ref DecimalContext context)
     {
         var status = context.Status;
-        var result = DecimalShaping.RotateOrShift<TFormat>(
-            TFormat.Unpack(value), TFormat.Unpack(places), false, ref status);
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+
+        var result = BcdOperations.RotateOrShift<TFormat>(ToWide(value), ToWide(places),
+            false, ref status, ref work);
+
         context.Status = status;
-        return TFormat.Pack(result);
+        return FromWide(result);
     }
 
     public static TBits NextPlus(TBits value, ref DecimalContext context)
     {
         var status = context.Status;
-        var result = DecimalShaping.NextPlus<TFormat>(TFormat.Unpack(value), ref status);
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+
+        var result = BcdOperations.NextPlus<TFormat>(ToWide(value), ref status, ref work);
         context.Status = status;
-        return TFormat.Pack(result);
+        return FromWide(result);
     }
 
     public static TBits NextMinus(TBits value, ref DecimalContext context)
     {
         var status = context.Status;
-        var result = DecimalShaping.NextMinus<TFormat>(TFormat.Unpack(value), ref status);
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+
+        var result = BcdOperations.NextMinus<TFormat>(ToWide(value), ref status, ref work);
         context.Status = status;
-        return TFormat.Pack(result);
+        return FromWide(result);
     }
 
     public static TBits NextToward(TBits value, TBits target, ref DecimalContext context)
     {
         var status = context.Status;
-        var result = DecimalShaping.NextToward<TFormat>(
-            TFormat.Unpack(value), TFormat.Unpack(target), ref status);
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+
+        var result = BcdOperations.NextToward<TFormat>(ToWide(value), ToWide(target),
+            ref status, ref work);
+
         context.Status = status;
-        return TFormat.Pack(result);
+        return FromWide(result);
     }
 
     // Numeric equality and ordering, which is what the generic math contracts mean by
@@ -534,19 +690,24 @@ internal static class DecimalCore<TFormat, TBits>
     public static int? CompareNumeric(TBits left, TBits right)
     {
         var status = DecimalStatus.None;
-        return DecimalArithmetic.Compare(TFormat.Unpack(left), TFormat.Unpack(right), false,
-            ref status, out _);
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+
+        var comparison = BcdOperations.Compare<TFormat>(ToWide(left), ToWide(right), false,
+            ref status, out _, ref work);
+
+        return comparison == int.MinValue ? null : comparison;
     }
 
     public static bool EqualsNumeric(TBits left, TBits right)
     {
         // Equals differs from == on one point, and follows the rest of .NET in doing so:
         // a NaN equals a NaN, so that a value can be found in a collection.
-        var first = TFormat.Unpack(left);
-        var second = TFormat.Unpack(right);
-        if (first.IsNaN || second.IsNaN)
+        var firstIsNaN = IsNaN(left);
+        var secondIsNaN = IsNaN(right);
+        if (firstIsNaN || secondIsNaN)
         {
-            return first.IsNaN && second.IsNaN;
+            return firstIsNaN && secondIsNaN;
         }
 
         return CompareNumeric(left, right) == 0;
@@ -580,7 +741,9 @@ internal static class DecimalCore<TFormat, TBits>
     /// </summary>
     public static int GetValueHashCode(TBits bits)
     {
-        var value = TFormat.Unpack(bits);
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+        var value = BcdCodec.Decode<TFormat>(ToWide(bits), work.Left);
 
         if (value.IsNaN)
         {
@@ -592,19 +755,28 @@ internal static class DecimalCore<TFormat, TBits>
             return value.IsNegative ? int.MinValue : int.MaxValue;
         }
 
-        if (value.Coefficient == UInt128.Zero)
+        if (value.IsZero)
         {
             return 0;
         }
 
-        var reduced = DecimalShaping.Trim(value);
-        while (reduced.Coefficient % 10 == UInt128.Zero)
+        // Every member of a cohort has to hash alike, so the trailing zeros come off all
+        // the way down -- past the zero exponent that Trim stops at.
+        while (value.Lsd > value.Msd && *value.Lsd == 0)
         {
-            reduced = new UnpackedDecimal<UInt128>(reduced.Kind, reduced.IsNegative,
-                reduced.Exponent + 1, reduced.Coefficient / 10);
+            value.Lsd--;
+            value.Exponent++;
         }
 
-        return HashCode.Combine(reduced.IsNegative, reduced.Exponent, reduced.Coefficient);
+        var hash = new HashCode();
+        hash.Add(value.IsNegative);
+        hash.Add(value.Exponent);
+        for (var digit = value.Msd; digit <= value.Lsd; digit++)
+        {
+            hash.Add(*digit);
+        }
+
+        return hash.ToHashCode();
     }
 
     public static bool IsInteger(TBits bits)
@@ -675,17 +847,21 @@ internal static class DecimalCore<TFormat, TBits>
         // Nothing to discard: the value already sits at or above the place asked for.
         // Rescaling it down to that place would pad the coefficient with zeros, which
         // changes the quantum and not the value -- that is what quantize is for.
-        var value = TFormat.Unpack(bits);
+        var scratch = stackalloc ulong[BcdWorkspace.ScratchLength];
+        var work = new BcdWorkspace(scratch);
+
+        var value = BcdCodec.Decode<TFormat>(ToWide(bits), work.Addend);
         if (value.Exponent >= -digits)
         {
             return bits;
         }
 
         var status = DecimalStatus.None;
-        var result = DecimalShaping.Rescale<TFormat>(value, -digits, rounding, ref status);
+        var result = BcdOperations.Rescale<TFormat>(ToWide(bits), -digits, rounding,
+            ref status, ref work);
 
         // Asking for more digits than the value has is not an error, it just leaves it be.
-        return (status & DecimalStatus.InvalidOperation) != 0 ? bits : TFormat.Pack(result);
+        return (status & DecimalStatus.InvalidOperation) != 0 ? bits : FromWide(result);
     }
 
     public static TBits SquareRoot(TBits value, ref DecimalContext context)
@@ -799,8 +975,9 @@ internal static class DecimalCore<TFormat, TBits>
     public static TBits FromBinary(Half value, BinaryConversion conversion) =>
         DecimalConversions<TFormat, TBits>.FromBinary(value, conversion);
 
-    public static BigInteger ToInteger(TBits bits) =>
-        DecimalConversions<TFormat, TBits>.ToInteger(bits);
+    public static TInteger ToInteger<TInteger>(TBits bits)
+        where TInteger : INumberBase<TInteger> =>
+        DecimalConversions<TFormat, TBits>.ToInteger<TInteger>(bits);
 
     public static double ToBinary(TBits bits) =>
         DecimalConversions<TFormat, TBits>.ToBinary(bits);

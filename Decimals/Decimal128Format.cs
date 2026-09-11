@@ -47,11 +47,15 @@ internal readonly struct Decimal128Format : IDecimalFormat<UInt128>
 
     public static UInt128 SignalingNaNMask { get; } = new(0x7E00000000000000UL, 0);
 
-    public static UnpackedDecimal<UInt128> Unpack(UInt128 bits) => BidCodec.Decode128(bits);
+    public static UnpackedDecimal<UInt128> Unpack(UInt128 bits) => DpdCodec.Decode128(bits);
 
-    public static UInt128 Pack(UnpackedDecimal<UInt128> value) => BidCodec.Encode128(value);
+    public static UInt128 Pack(UnpackedDecimal<UInt128> value) => DpdCodec.Encode128(value);
 
-    public static UInt128 FromDpd(UInt128 bits) => BidCodec.Encode128(DpdCodec.Decode128(bits));
+    public static UInt128 FromDpd(UInt128 bits) => bits;
 
-    public static UInt128 ToDpd(UInt128 bits) => DpdCodec.Encode128(BidCodec.Decode128(bits));
+    public static UInt128 ToDpd(UInt128 bits) => bits;
+
+    public static UInt128 FromBid(UInt128 bits) => DpdCodec.Encode128(BidCodec.Decode128(bits));
+
+    public static UInt128 ToBid(UInt128 bits) => BidCodec.Encode128(DpdCodec.Decode128(bits));
 }

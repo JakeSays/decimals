@@ -48,17 +48,21 @@ internal readonly struct Decimal64Format : IDecimalFormat<ulong>
 
     public static UnpackedDecimal<UInt128> Unpack(ulong bits)
     {
-        var value = BidCodec.Decode64(bits);
+        var value = DpdCodec.Decode64(bits);
         return new UnpackedDecimal<UInt128>(value.Kind, value.IsNegative, value.Exponent, value.Coefficient);
     }
 
     public static ulong Pack(UnpackedDecimal<UInt128> value)
     {
-        return BidCodec.Encode64(new UnpackedDecimal<ulong>(
+        return DpdCodec.Encode64(new UnpackedDecimal<ulong>(
             value.Kind, value.IsNegative, value.Exponent, (ulong)value.Coefficient));
     }
 
-    public static ulong FromDpd(ulong bits) => BidCodec.Encode64(DpdCodec.Decode64(bits));
+    public static ulong FromDpd(ulong bits) => bits;
 
-    public static ulong ToDpd(ulong bits) => DpdCodec.Encode64(BidCodec.Decode64(bits));
+    public static ulong ToDpd(ulong bits) => bits;
+
+    public static ulong FromBid(ulong bits) => DpdCodec.Encode64(BidCodec.Decode64(bits));
+
+    public static ulong ToBid(ulong bits) => BidCodec.Encode64(DpdCodec.Decode64(bits));
 }

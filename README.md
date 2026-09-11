@@ -213,15 +213,22 @@ specification has an engineering notation and .NET has no specifier for it.
 var bits = value.ToBits();                  // uint, ulong, or UInt128
 var restored = Decimal64.FromBits(bits);
 
-var interchange = value.ToDpdBits();        // densely packed decimal
+var interchange = value.ToDpdBits();        // densely packed decimal, the stored form
 var fromWire = Decimal64.FromDpdBits(interchange);
+
+var binary = value.ToBidBits();             // binary integer decimal, a conversion
+var fromBinary = Decimal64.FromBidBits(binary);
 ```
 
-The in-memory encoding is **BID** (binary integer decimal), which keeps the coefficient as a
-binary integer. `ToDpdBits` and `FromDpdBits` reach the **DPD** (densely packed decimal)
-form, which is what decimal hardware and decNumber exchange. IEEE 754 permits either for
-decimal interchange formats; both are implemented and the corpus checks the DPD conversion
-bit for bit.
+The in-memory encoding is **DPD** (densely packed decimal), three digits to a ten-bit
+declet, which is what decimal hardware and decNumber exchange -- so `ToBits` and
+`ToDpdBits` agree and neither costs anything. `ToBidBits` and `FromBidBits` reach the
+**BID** (binary integer decimal) form, where the coefficient is a plain binary integer.
+IEEE 754 permits either for decimal interchange formats; both are implemented and the
+corpus checks the conversion bit for bit.
+
+Storing the interchange form means a non-canonical encoding survives being held, which is
+what IEEE `copy` requires of it, and makes `Canonical` a real operation.
 
 ### Elementary functions and generic math
 

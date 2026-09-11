@@ -14,8 +14,9 @@ namespace Decimals;
 /// An IEEE 754 decimal128 value: 34 digits of coefficient, exponents from -6176 to +6111.
 /// </summary>
 /// <remarks>
-/// The in-memory encoding is BID. <see cref="ToDpdBits"/> and <see cref="FromDpdBits"/>
-/// reach the densely-packed-decimal interchange form. Everything here forwards to
+/// The in-memory encoding is DPD, the interchange form, so the raw bits are the bits
+/// decNumber writes and decimal hardware consumes. <see cref="ToBidBits"/> and
+/// <see cref="FromBidBits"/> reach the binary-integer form. Everything here forwards to
 /// <see cref="DecimalCore{TFormat, TBits}"/>, which holds the one copy of the logic.
 /// </remarks>
 public readonly struct Decimal128
@@ -53,18 +54,27 @@ public readonly struct Decimal128
 
     public static Decimal128 NaN => new(Core.Special(DecimalKind.QuietNaN, false));
 
-    /// <summary>The raw encoding, which is BID rather than DPD.</summary>
+    /// <summary>The raw encoding, which is DPD.</summary>
     public UInt128 ToBits() => _bits;
 
     public static Decimal128 FromBits(UInt128 bits) => new(bits);
 
     /// <summary>
     /// The densely-packed-decimal interchange encoding, which is what decimal hardware and
-    /// DPD-based libraries exchange.
+    /// DPD-based libraries exchange. This is the in-memory encoding, so it costs nothing.
     /// </summary>
     public UInt128 ToDpdBits() => Decimal128Format.ToDpd(_bits);
 
     public static Decimal128 FromDpdBits(UInt128 bits) => new(Decimal128Format.FromDpd(bits));
+
+    /// <summary>
+    /// The binary-integer-decimal encoding, where the coefficient is a plain integer in the
+    /// trailing field. IEEE 754 defines both encodings and either conforms; this one is
+    /// what Intel's library and the hardware-free implementations built on it exchange.
+    /// </summary>
+    public UInt128 ToBidBits() => Decimal128Format.ToBid(_bits);
+
+    public static Decimal128 FromBidBits(UInt128 bits) => new(Decimal128Format.FromBid(bits));
 
     public static bool IsNaN(Decimal128 value) => Core.IsNaN(value._bits);
 
@@ -91,6 +101,9 @@ public readonly struct Decimal128
     /// decode as zero, so re-encoding does not give the same bits back.
     /// </summary>
     public static bool IsCanonical(Decimal128 value) => Core.IsCanonical(value._bits);
+
+    /// <summary>The same value in its canonical encoding.</summary>
+    public static Decimal128 Canonical(Decimal128 value) => new(Core.Canonical(value._bits));
 
     public static DecimalClass Class(Decimal128 value) => Core.Classify(value._bits);
 
@@ -660,21 +673,21 @@ public readonly struct Decimal128
 
     static Decimal128 IMinMaxValue<Decimal128>.MaxValue => MaxValue;
 
-    // The constants are their encodings, not text to be parsed at startup. Each is the BID
-    // form of the value written beside it: sign 0, biased exponent 6143 for an exponent of
-    // -33, and the thirty-four digit coefficient in the trailing field.
+    // The constants are their encodings, not text to be parsed at startup. Each is the DPD
+    // form of the value written beside it: sign 0, an exponent of -33, and the thirty-four
+    // digit coefficient as a leading digit in the combination field and eleven declets.
 
     /// <summary>The base of natural logarithms: 2.718281828459045235360287471352662.</summary>
-    public static Decimal128 E => new(new UInt128(0x2ffe86058a4bf4de, 0x4e906accb26abb56));
+    public static Decimal128 E => new(new UInt128(0x29fff9842d2e9644, 0x54d5e05ae7174b62));
 
     /// <summary>
     /// The ratio of a circle's circumference to its diameter:
     /// 3.141592653589793238462643383279503.
     /// </summary>
-    public static Decimal128 Pi => new(new UInt128(0x2ffe9ae4795796a7, 0xbabe5564e6f39f8f));
+    public static Decimal128 Pi => new(new UInt128(0x2dffcc1aeb53b3fb, 0xb4e262d0dab5e683));
 
     /// <summary>Two Pi: 6.283185307179586476925286766559006.</summary>
-    public static Decimal128 Tau => new(new UInt128(0x2fff35c8f2af2d4f, 0x757caac9cde73f1e));
+    public static Decimal128 Tau => new(new UInt128(0x39ffd2b32d873e6e, 0xa9daad5abe6b6406));
 
     public static Decimal128 Abs(Decimal128 value) => CopyAbs(value);
 
@@ -1035,27 +1048,27 @@ public readonly struct Decimal128
     public static Decimal128 FromBinary(Half value, BinaryConversion conversion) =>
         new(Core.FromBinary(value, conversion));
 
-    public static explicit operator sbyte(Decimal128 value) => sbyte.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator sbyte(Decimal128 value) => Core.ToInteger<sbyte>(value._bits);
 
-    public static explicit operator byte(Decimal128 value) => byte.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator byte(Decimal128 value) => Core.ToInteger<byte>(value._bits);
 
-    public static explicit operator short(Decimal128 value) => short.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator short(Decimal128 value) => Core.ToInteger<short>(value._bits);
 
-    public static explicit operator ushort(Decimal128 value) => ushort.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator ushort(Decimal128 value) => Core.ToInteger<ushort>(value._bits);
 
-    public static explicit operator char(Decimal128 value) => (char)ushort.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator char(Decimal128 value) => (char)Core.ToInteger<ushort>(value._bits);
 
-    public static explicit operator int(Decimal128 value) => int.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator int(Decimal128 value) => Core.ToInteger<int>(value._bits);
 
-    public static explicit operator uint(Decimal128 value) => uint.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator uint(Decimal128 value) => Core.ToInteger<uint>(value._bits);
 
-    public static explicit operator long(Decimal128 value) => long.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator long(Decimal128 value) => Core.ToInteger<long>(value._bits);
 
-    public static explicit operator ulong(Decimal128 value) => ulong.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator ulong(Decimal128 value) => Core.ToInteger<ulong>(value._bits);
 
-    public static explicit operator Int128(Decimal128 value) => Int128.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator Int128(Decimal128 value) => Core.ToInteger<Int128>(value._bits);
 
-    public static explicit operator UInt128(Decimal128 value) => UInt128.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator UInt128(Decimal128 value) => Core.ToInteger<UInt128>(value._bits);
 
     public static explicit operator Half(Decimal128 value) => (Half)Core.ToBinary(value._bits);
 

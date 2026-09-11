@@ -1,6 +1,9 @@
 // Copyright (c) JakeSays
 // SPDX-License-Identifier: MIT
 
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+
 namespace Decimals;
 
 /// <summary>
@@ -8,25 +11,101 @@ namespace Decimals;
 /// the IEEE interchange encodings.
 /// </summary>
 /// <remarks>
-/// The tables are built at startup from the bit rules rather than written out, so the rules
-/// are what gets reviewed. Twenty-four of the 1024 declets are non-canonical -- they decode
-/// to a value another declet also encodes -- and encoding always produces the canonical
-/// one.
+/// <para>
+/// The tables come from <see cref="DpdTables"/>, which <c>dpd-tables</c> generates from the
+/// bit rules. They sit in the assembly's data section, so there is nothing to build at
+/// startup and no class constructor between a caller and a lookup; taking a pointer to one
+/// needs no pinning, because a data-section span does not move.
+/// </para>
+/// <para>
+/// Twenty-four of the 1024 declets are non-canonical -- they decode to a value another
+/// declet also encodes -- and encoding always produces the canonical one.
+/// </para>
 /// </remarks>
-internal static class Dpd
+internal static unsafe class Dpd
 {
     public const int DecletCount = 1024;
     public const int ValueCount = 1000;
 
-    private static readonly ushort[] DecletToBinaryTable = BuildDecletToBinary();
-    private static readonly ushort[] BinaryToDecletTable = BuildBinaryToDeclet();
+    /// <summary>Digits in a declet, and so the stride of the unpacking table.</summary>
+    public const int DigitsPerDeclet = 3;
+
+    /// <summary>A declet is ten bits, so the packing table's stride is two.</summary>
+    private const int BytesPerDeclet = 2;
 
     /// <summary>
-    /// Turns a ten-bit declet into the three digits it carries, 0 through 999.
+    /// The unpacking table: three digits at <c>declet * 3</c>, most significant first.
+    /// </summary>
+    private static byte* DecletToBcd
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => (byte*)Unsafe.AsPointer(ref MemoryMarshal.GetReference(DpdTables.DecletToBcd));
+    }
+
+    /// <summary>
+    /// The packing table: a declet at <c>nibbles * 2</c>, least significant byte first.
+    /// </summary>
+    private static byte* BcdToDeclet
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => (byte*)Unsafe.AsPointer(ref MemoryMarshal.GetReference(DpdTables.BcdToDeclet));
+    }
+
+    /// <summary>
+    /// Writes a declet's three digits, one per byte and most significant first. This is the
+    /// whole of unpacking: three bytes copied, and no arithmetic anywhere.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void WriteDigits(uint declet, byte* destination)
+    {
+        var source = DecletToBcd + (declet * DigitsPerDeclet);
+        destination[0] = source[0];
+        destination[1] = source[1];
+        destination[2] = source[2];
+    }
+
+    /// <summary>
+    /// The canonical declet carrying three digits held one per nibble, most significant
+    /// first. This is the whole of packing.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static uint FromNibbles(uint nibbles)
+    {
+        var source = BcdToDeclet + (nibbles * BytesPerDeclet);
+        return (uint)(source[0] | (source[1] << 8));
+    }
+
+    /// <summary>
+    /// The base-billion splitting table: three digits at <c>value * 3</c>.
+    /// </summary>
+    private static byte* BinaryToBcd
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => (byte*)Unsafe.AsPointer(ref MemoryMarshal.GetReference(DpdTables.BinaryToBcd));
+    }
+
+    /// <summary>
+    /// Writes a value 0 through 999 as three digits, one per byte and most significant
+    /// first. Laying a base-billion limb back out as digits goes through this three times.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void WriteTriple(uint value, byte* destination)
+    {
+        var source = BinaryToBcd + (value * DigitsPerDeclet);
+        destination[0] = source[0];
+        destination[1] = source[1];
+        destination[2] = source[2];
+    }
+
+    /// <summary>
+    /// Turns a ten-bit declet into the three digits it carries, 0 through 999. This is the
+    /// interchange boundary's view, not arithmetic's: it forms a number, which is what the
+    /// digit form exists to avoid.
     /// </summary>
     public static uint ToBinary(uint declet)
     {
-        return DecletToBinaryTable[declet];
+        var source = DecletToBcd + (declet * DigitsPerDeclet);
+        return (uint)((source[0] * 100) + (source[1] * 10) + source[2]);
     }
 
     /// <summary>
@@ -34,141 +113,9 @@ internal static class Dpd
     /// </summary>
     public static uint ToDeclet(uint value)
     {
-        return BinaryToDecletTable[value];
-    }
-
-    private static ushort[] BuildDecletToBinary()
-    {
-        var table = new ushort[DecletCount];
-        for (var declet = 0u; declet < DecletCount; declet++)
-        {
-            table[declet] = (ushort)DecodeDeclet(declet);
-        }
-
-        return table;
-    }
-
-    private static ushort[] BuildBinaryToDeclet()
-    {
-        var table = new ushort[ValueCount];
-        for (var value = 0u; value < ValueCount; value++)
-        {
-            table[value] = (ushort)EncodeDeclet(value);
-        }
-
-        return table;
-    }
-
-    /// <summary>
-    /// The declet bit layout is <c>p q r s t u v w x y</c> from bit 9 down to bit 0. When
-    /// <c>v</c> is clear all three digits are 0 through 7 and sit in <c>pqr</c>, <c>stu</c>,
-    /// and <c>wxy</c>; otherwise <c>wx</c>, and then <c>st</c>, select which digits are 8 or
-    /// 9 and where the survivors moved to.
-    /// </summary>
-    private static uint DecodeDeclet(uint declet)
-    {
-        var p = (declet >> 9) & 1;
-        var q = (declet >> 8) & 1;
-        var r = (declet >> 7) & 1;
-        var s = (declet >> 6) & 1;
-        var t = (declet >> 5) & 1;
-        var u = (declet >> 4) & 1;
-        var v = (declet >> 3) & 1;
-        var w = (declet >> 2) & 1;
-        var x = (declet >> 1) & 1;
-        var y = declet & 1;
-
-        var pqr = (p << 2) | (q << 1) | r;
-        var stu = (s << 2) | (t << 1) | u;
-        var wxy = (w << 2) | (x << 1) | y;
-        var pqu = (p << 2) | (q << 1) | u;
-        var sty = (s << 2) | (t << 1) | y;
-        var pqy = (p << 2) | (q << 1) | y;
-
-        if (v == 0)
-        {
-            return Combine(pqr, stu, wxy);
-        }
-
-        var wx = (w << 1) | x;
-        if (wx == 0)
-        {
-            return Combine(pqr, stu, 8 + y);
-        }
-
-        if (wx == 1)
-        {
-            return Combine(pqr, 8 + u, sty);
-        }
-
-        if (wx == 2)
-        {
-            return Combine(8 + r, stu, pqy);
-        }
-
-        var st = (s << 1) | t;
-        if (st == 0)
-        {
-            return Combine(8 + r, 8 + u, pqy);
-        }
-
-        if (st == 1)
-        {
-            return Combine(8 + r, pqu, 8 + y);
-        }
-
-        if (st == 2)
-        {
-            return Combine(pqr, 8 + u, 8 + y);
-        }
-
-        // st == 3: p and q carry nothing here, which is where the non-canonical declets
-        // come from -- four encodings of the same three digits, and only pq == 00 is written.
-        return Combine(8 + r, 8 + u, 8 + y);
-    }
-
-    private static uint EncodeDeclet(uint value)
-    {
         var high = value / 100;
         var middle = (value / 10) % 10;
         var low = value % 10;
-
-        // The high bit of each digit selects the layout; the low three bits are what has to
-        // be placed. Digits 8 and 9 need only their last bit carried.
-        var a = high >> 3;
-        var bcd = high & 7;
-        var e = middle >> 3;
-        var fgh = middle & 7;
-        var i = low >> 3;
-        var jkm = low & 7;
-
-        var selector = (a << 2) | (e << 1) | i;
-        var d = bcd & 1;
-        var h = fgh & 1;
-        var m = jkm & 1;
-        var jk = jkm >> 1;
-        var fg = fgh >> 1;
-
-        return selector switch
-        {
-            0 => Pack(bcd, fgh, 0, jkm),
-            1 => Pack(bcd, fgh, 1, m),
-            2 => Pack(bcd, (jk << 1) | h, 1, 2 | m),
-            3 => Pack(bcd, 4 | h, 1, 6 | m),
-            4 => Pack((jk << 1) | d, fgh, 1, 4 | m),
-            5 => Pack((fg << 1) | d, 2 | h, 1, 6 | m),
-            6 => Pack((jk << 1) | d, h, 1, 6 | m),
-            _ => Pack(d, 6 | h, 1, 6 | m)
-        };
-    }
-
-    private static uint Combine(uint high, uint middle, uint low)
-    {
-        return (high * 100) + (middle * 10) + low;
-    }
-
-    private static uint Pack(uint pqr, uint stu, uint v, uint wxy)
-    {
-        return (pqr << 7) | (stu << 4) | (v << 3) | wxy;
+        return FromNibbles((high << 8) | (middle << 4) | low);
     }
 }

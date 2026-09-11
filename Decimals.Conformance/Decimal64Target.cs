@@ -48,9 +48,11 @@ public readonly struct Decimal64Target : IDecTestTarget<Decimal64Target, Decimal
         switch (operation)
         {
             case DecTestOperation.Apply:
-            case DecTestOperation.Canonical:
             case DecTestOperation.Copy:
                 result = operands[0];
+                return true;
+            case DecTestOperation.Canonical:
+                result = Decimal64.Canonical(operands[0]);
                 return true;
             case DecTestOperation.CopyAbs:
                 result = Decimal64.CopyAbs(operands[0]);

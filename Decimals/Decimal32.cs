@@ -14,8 +14,9 @@ namespace Decimals;
 /// An IEEE 754 decimal32 value: 7 digits of coefficient, exponents from -101 to +90.
 /// </summary>
 /// <remarks>
-/// The in-memory encoding is BID. <see cref="ToDpdBits"/> and <see cref="FromDpdBits"/>
-/// reach the densely-packed-decimal interchange form. Everything here forwards to
+/// The in-memory encoding is DPD, the interchange form, so the raw bits are the bits
+/// decNumber writes and decimal hardware consumes. <see cref="ToBidBits"/> and
+/// <see cref="FromBidBits"/> reach the binary-integer form. Everything here forwards to
 /// <see cref="DecimalCore{TFormat, TBits}"/>, which holds the one copy of the logic.
 /// </remarks>
 public readonly struct Decimal32
@@ -53,18 +54,27 @@ public readonly struct Decimal32
 
     public static Decimal32 NaN => new(Core.Special(DecimalKind.QuietNaN, false));
 
-    /// <summary>The raw encoding, which is BID rather than DPD.</summary>
+    /// <summary>The raw encoding, which is DPD.</summary>
     public uint ToBits() => _bits;
 
     public static Decimal32 FromBits(uint bits) => new(bits);
 
     /// <summary>
     /// The densely-packed-decimal interchange encoding, which is what decimal hardware and
-    /// DPD-based libraries exchange.
+    /// DPD-based libraries exchange. This is the in-memory encoding, so it costs nothing.
     /// </summary>
     public uint ToDpdBits() => Decimal32Format.ToDpd(_bits);
 
     public static Decimal32 FromDpdBits(uint bits) => new(Decimal32Format.FromDpd(bits));
+
+    /// <summary>
+    /// The binary-integer-decimal encoding, where the coefficient is a plain integer in the
+    /// trailing field. IEEE 754 defines both encodings and either conforms; this one is
+    /// what Intel's library and the hardware-free implementations built on it exchange.
+    /// </summary>
+    public uint ToBidBits() => Decimal32Format.ToBid(_bits);
+
+    public static Decimal32 FromBidBits(uint bits) => new(Decimal32Format.FromBid(bits));
 
     public static bool IsNaN(Decimal32 value) => Core.IsNaN(value._bits);
 
@@ -91,6 +101,9 @@ public readonly struct Decimal32
     /// decode as zero, so re-encoding does not give the same bits back.
     /// </summary>
     public static bool IsCanonical(Decimal32 value) => Core.IsCanonical(value._bits);
+
+    /// <summary>The same value in its canonical encoding.</summary>
+    public static Decimal32 Canonical(Decimal32 value) => new(Core.Canonical(value._bits));
 
     public static DecimalClass Class(Decimal32 value) => Core.Classify(value._bits);
 
@@ -660,18 +673,18 @@ public readonly struct Decimal32
 
     static Decimal32 IMinMaxValue<Decimal32>.MaxValue => MaxValue;
 
-    // The constants are their encodings, not text to be parsed at startup. Each is the BID
-    // form of the value written beside it: sign 0, biased exponent 95 for an exponent of
-    // -6, and the seven-digit coefficient in the trailing field.
+    // The constants are their encodings, not text to be parsed at startup. Each is the DPD
+    // form of the value written beside it: sign 0, an exponent of -6, and the seven digit
+    // coefficient as a leading digit in the combination field and two declets.
 
     /// <summary>The base of natural logarithms: 2.718282.</summary>
-    public static Decimal32 E => new(0x2fa97a4a);
+    public static Decimal32 E => new(0x29fe612a);
 
     /// <summary>The ratio of a circle's circumference to its diameter: 3.141593.</summary>
-    public static Decimal32 Pi => new(0x2fafefd9);
+    public static Decimal32 Pi => new(0x2df306bb);
 
     /// <summary>Two Pi: 6.283185.</summary>
-    public static Decimal32 Tau => new(0x2fdfdfb1);
+    public static Decimal32 Tau => new(0x39f4accb);
 
     public static Decimal32 Abs(Decimal32 value) => CopyAbs(value);
 
@@ -1017,27 +1030,27 @@ public readonly struct Decimal32
     public static Decimal32 FromBinary(Half value, BinaryConversion conversion) =>
         new(Core.FromBinary(value, conversion));
 
-    public static explicit operator sbyte(Decimal32 value) => sbyte.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator sbyte(Decimal32 value) => Core.ToInteger<sbyte>(value._bits);
 
-    public static explicit operator byte(Decimal32 value) => byte.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator byte(Decimal32 value) => Core.ToInteger<byte>(value._bits);
 
-    public static explicit operator short(Decimal32 value) => short.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator short(Decimal32 value) => Core.ToInteger<short>(value._bits);
 
-    public static explicit operator ushort(Decimal32 value) => ushort.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator ushort(Decimal32 value) => Core.ToInteger<ushort>(value._bits);
 
-    public static explicit operator char(Decimal32 value) => (char)ushort.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator char(Decimal32 value) => (char)Core.ToInteger<ushort>(value._bits);
 
-    public static explicit operator int(Decimal32 value) => int.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator int(Decimal32 value) => Core.ToInteger<int>(value._bits);
 
-    public static explicit operator uint(Decimal32 value) => uint.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator uint(Decimal32 value) => Core.ToInteger<uint>(value._bits);
 
-    public static explicit operator long(Decimal32 value) => long.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator long(Decimal32 value) => Core.ToInteger<long>(value._bits);
 
-    public static explicit operator ulong(Decimal32 value) => ulong.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator ulong(Decimal32 value) => Core.ToInteger<ulong>(value._bits);
 
-    public static explicit operator Int128(Decimal32 value) => Int128.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator Int128(Decimal32 value) => Core.ToInteger<Int128>(value._bits);
 
-    public static explicit operator UInt128(Decimal32 value) => UInt128.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator UInt128(Decimal32 value) => Core.ToInteger<UInt128>(value._bits);
 
     public static explicit operator Half(Decimal32 value) => (Half)Core.ToBinary(value._bits);
 

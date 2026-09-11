@@ -212,17 +212,6 @@ public static class DecTestRunner
                         break;
                     }
 
-                    if (IsCopyFamily(operation) && !IsCanonical<TTarget, TDecimal>(operand.Text))
-                    {
-                        // The copy family is defined on the bits and is supposed to hand a
-                        // non-canonical operand back untouched. A BID-backed value cannot
-                        // hold one -- it canonicalizes on decode -- so there is nothing here
-                        // for the type to get right or wrong.
-                        totals.AddSkip("non-canonical encoding, which BID storage cannot preserve",
-                            testCase.Id);
-                        return;
-                    }
-
                     operands[index] = TTarget.FromDpdHex(operand.Text);
 
                     if (DecTestOperations.ReportsConversionConditions(operation))

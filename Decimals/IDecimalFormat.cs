@@ -86,9 +86,18 @@ internal interface IDecimalFormat<TBits> : IDecimalFormat
 
     static abstract TBits Pack(UnpackedDecimal<UInt128> value);
 
-    /// <summary>Reads the densely-packed-decimal interchange form into the in-memory one.</summary>
+    /// <summary>
+    /// Reads the densely-packed-decimal interchange form into the in-memory one, which is
+    /// the same encoding, so this carries the bits through unchanged.
+    /// </summary>
     static abstract TBits FromDpd(TBits bits);
 
     /// <summary>Writes the in-memory form out as the interchange form.</summary>
     static abstract TBits ToDpd(TBits bits);
+
+    /// <summary>Reads the binary-integer-decimal form into the in-memory one.</summary>
+    static abstract TBits FromBid(TBits bits);
+
+    /// <summary>Writes the in-memory form out as binary integer decimal.</summary>
+    static abstract TBits ToBid(TBits bits);
 }

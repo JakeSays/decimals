@@ -8,5 +8,6 @@
   <Project Path="Decimals/Decimals.csproj" />
   <Project Path="Decimals.Conformance/Decimals.Conformance.csproj" />
   <Project Path="DecTest/DecTest.csproj" />
+  <Project Path="DpdTableGenerator/DpdTableGenerator.csproj" />
   <Project Path="Tests/Tests.csproj" />
 </Solution>

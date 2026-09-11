@@ -4,8 +4,8 @@
 namespace Decimals;
 
 /// <summary>
-/// The working context the elementary functions carry, which is decNumber's decContext
-/// with the fields those functions vary.
+/// The working context the elementary functions carry, which is decNumber's decContext with
+/// the fields those functions vary.
 /// </summary>
 /// <remarks>
 /// The algorithms in <see cref="DecimalMath"/> lean on the context the way decNumber's do:
@@ -13,7 +13,7 @@ namespace Decimals;
 /// cannot overflow, and turn clamping off where no concrete format is in play. Keeping the
 /// same shape here is what lets the port be read against the original.
 /// </remarks>
-internal struct BigDecimalContext
+internal struct WideContext
 {
     /// <summary>
     /// decNumber's DEC_MAX_MATH: the widest exponent its mathematical functions accept.
@@ -47,9 +47,9 @@ internal struct BigDecimalContext
     /// decNumber's DEC_INIT_DECIMAL64 defaults, which its functions start their working
     /// contexts from before overriding whichever fields the algorithm needs.
     /// </summary>
-    public static BigDecimalContext Default()
+    public static WideContext Default()
     {
-        return new BigDecimalContext
+        return new WideContext
         {
             Digits = 16,
             MaxExponent = 384,
@@ -59,10 +59,10 @@ internal struct BigDecimalContext
         };
     }
 
-    public static BigDecimalContext ForFormat<TFormat>(DecimalRounding rounding)
+    public static WideContext ForFormat<TFormat>(DecimalRounding rounding)
         where TFormat : IDecimalFormat
     {
-        return new BigDecimalContext
+        return new WideContext
         {
             Digits = TFormat.Precision,
             MaxExponent = TFormat.MaxExponent,

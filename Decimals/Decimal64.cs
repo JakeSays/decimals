@@ -14,8 +14,9 @@ namespace Decimals;
 /// An IEEE 754 decimal64 value: 16 digits of coefficient, exponents from -398 to +369.
 /// </summary>
 /// <remarks>
-/// The in-memory encoding is BID. <see cref="ToDpdBits"/> and <see cref="FromDpdBits"/>
-/// reach the densely-packed-decimal interchange form. Everything here forwards to
+/// The in-memory encoding is DPD, the interchange form, so the raw bits are the bits
+/// decNumber writes and decimal hardware consumes. <see cref="ToBidBits"/> and
+/// <see cref="FromBidBits"/> reach the binary-integer form. Everything here forwards to
 /// <see cref="DecimalCore{TFormat, TBits}"/>, which holds the one copy of the logic.
 /// </remarks>
 public readonly struct Decimal64
@@ -53,18 +54,27 @@ public readonly struct Decimal64
 
     public static Decimal64 NaN => new(Core.Special(DecimalKind.QuietNaN, false));
 
-    /// <summary>The raw encoding, which is BID rather than DPD.</summary>
+    /// <summary>The raw encoding, which is DPD.</summary>
     public ulong ToBits() => _bits;
 
     public static Decimal64 FromBits(ulong bits) => new(bits);
 
     /// <summary>
     /// The densely-packed-decimal interchange encoding, which is what decimal hardware and
-    /// DPD-based libraries exchange.
+    /// DPD-based libraries exchange. This is the in-memory encoding, so it costs nothing.
     /// </summary>
     public ulong ToDpdBits() => Decimal64Format.ToDpd(_bits);
 
     public static Decimal64 FromDpdBits(ulong bits) => new(Decimal64Format.FromDpd(bits));
+
+    /// <summary>
+    /// The binary-integer-decimal encoding, where the coefficient is a plain integer in the
+    /// trailing field. IEEE 754 defines both encodings and either conforms; this one is
+    /// what Intel's library and the hardware-free implementations built on it exchange.
+    /// </summary>
+    public ulong ToBidBits() => Decimal64Format.ToBid(_bits);
+
+    public static Decimal64 FromBidBits(ulong bits) => new(Decimal64Format.FromBid(bits));
 
     public static bool IsNaN(Decimal64 value) => Core.IsNaN(value._bits);
 
@@ -91,6 +101,9 @@ public readonly struct Decimal64
     /// decode as zero, so re-encoding does not give the same bits back.
     /// </summary>
     public static bool IsCanonical(Decimal64 value) => Core.IsCanonical(value._bits);
+
+    /// <summary>The same value in its canonical encoding.</summary>
+    public static Decimal64 Canonical(Decimal64 value) => new(Core.Canonical(value._bits));
 
     public static DecimalClass Class(Decimal64 value) => Core.Classify(value._bits);
 
@@ -660,18 +673,18 @@ public readonly struct Decimal64
 
     static Decimal64 IMinMaxValue<Decimal64>.MaxValue => MaxValue;
 
-    // The constants are their encodings, not text to be parsed at startup. Each is the
-    // BID form of the value written beside it: sign 0, biased exponent 383 for an exponent
-    // of -15, and the sixteen-digit coefficient in the trailing field.
+    // The constants are their encodings, not text to be parsed at startup. Each is the DPD
+    // form of the value written beside it: sign 0, an exponent of -15, and the sixteen
+    // digit coefficient as a leading digit in the combination field and five declets.
 
     /// <summary>The base of natural logarithms: 2.718281828459045.</summary>
-    public static Decimal64 E => new(0x2fe9a8434ec8e225);
+    public static Decimal64 E => new(0x29ff9842d2e96445);
 
     /// <summary>The ratio of a circle's circumference to its diameter: 3.141592653589793.</summary>
-    public static Decimal64 Pi => new(0x2feb29430a256d21);
+    public static Decimal64 Pi => new(0x2dfcc1aeb53b3fbb);
 
     /// <summary>Two Pi: 6.283185307179586.</summary>
-    public static Decimal64 Tau => new(0x2ff65286144ada42);
+    public static Decimal64 Tau => new(0x39fd2b32d873e6ea);
 
     public static Decimal64 Abs(Decimal64 value) => CopyAbs(value);
 
@@ -1026,27 +1039,27 @@ public readonly struct Decimal64
     public static Decimal64 FromBinary(Half value, BinaryConversion conversion) =>
         new(Core.FromBinary(value, conversion));
 
-    public static explicit operator sbyte(Decimal64 value) => sbyte.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator sbyte(Decimal64 value) => Core.ToInteger<sbyte>(value._bits);
 
-    public static explicit operator byte(Decimal64 value) => byte.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator byte(Decimal64 value) => Core.ToInteger<byte>(value._bits);
 
-    public static explicit operator short(Decimal64 value) => short.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator short(Decimal64 value) => Core.ToInteger<short>(value._bits);
 
-    public static explicit operator ushort(Decimal64 value) => ushort.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator ushort(Decimal64 value) => Core.ToInteger<ushort>(value._bits);
 
-    public static explicit operator char(Decimal64 value) => (char)ushort.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator char(Decimal64 value) => (char)Core.ToInteger<ushort>(value._bits);
 
-    public static explicit operator int(Decimal64 value) => int.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator int(Decimal64 value) => Core.ToInteger<int>(value._bits);
 
-    public static explicit operator uint(Decimal64 value) => uint.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator uint(Decimal64 value) => Core.ToInteger<uint>(value._bits);
 
-    public static explicit operator long(Decimal64 value) => long.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator long(Decimal64 value) => Core.ToInteger<long>(value._bits);
 
-    public static explicit operator ulong(Decimal64 value) => ulong.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator ulong(Decimal64 value) => Core.ToInteger<ulong>(value._bits);
 
-    public static explicit operator Int128(Decimal64 value) => Int128.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator Int128(Decimal64 value) => Core.ToInteger<Int128>(value._bits);
 
-    public static explicit operator UInt128(Decimal64 value) => UInt128.CreateChecked(Core.ToInteger(value._bits));
+    public static explicit operator UInt128(Decimal64 value) => Core.ToInteger<UInt128>(value._bits);
 
     public static explicit operator Half(Decimal64 value) => (Half)Core.ToBinary(value._bits);
 
