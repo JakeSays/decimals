@@ -141,25 +141,31 @@ the specification's additional conditions (`ConversionSyntax`, `DivisionImpossib
 
 ### Exponent and quantum
 
-`1` and `1.00` are equal in value but have different exponents. The exponent is called the
-*quantum*, and it is part of the stored value:
+A value is stored as a coefficient and an exponent, and the same number can be stored in
+more than one way. `1` is stored as coefficient 1 with exponent 0. `1.00` is stored as
+coefficient 100 with exponent -2. Both equal one. The value of the last digit, 10 to the
+power of the exponent, is called the *quantum*: 1 for `1`, and 0.01 for `1.00`.
+
+The set of all encodings of one number is called a *cohort*. The type keeps the exponent,
+so the two members of this cohort behave differently in some operations:
 
 ```csharp
-var one = Decimal64.Parse("1");
-var alsoOne = Decimal64.Parse("1.00");
+var one = Decimal64.Parse("1");        // coefficient 1, exponent 0
+var alsoOne = Decimal64.Parse("1.00"); // coefficient 100, exponent -2
 
-one == alsoOne                          // true
+one == alsoOne                          // true: the numbers are equal
 one.Equals(alsoOne)                     // true
+one.GetHashCode() == alsoOne.GetHashCode()   // true
 one.ToString()                          // "1"
-alsoOne.ToString()                      // "1.00"
-one.ToBits() == alsoOne.ToBits()        // false
-Decimal64.CompareTotal(one, alsoOne)    // > 0
+alsoOne.ToString()                      // "1.00": the text shows the exponent
+one.ToBits() == alsoOne.ToBits()        // false: the stored coefficient and exponent differ
+Decimal64.CompareTotal(one, alsoOne)    // > 0: the total order puts 1.00 before 1
 ```
 
-Values that are equal but have different exponents form a *cohort*. Equality, ordering,
-and hashing compare numeric value, so all members of a cohort are equal as dictionary
-keys and when sorted. `CompareTotal` is the IEEE 754 total order, which also orders by
-exponent.
+`==`, `Equals`, `GetHashCode`, and `CompareTo` compare numeric value only. All members of a
+cohort are therefore the same dictionary key and sort as equal. `CompareTotal` is the
+IEEE 754 total order. It also compares exponents: for positive numbers in the same
+cohort, the one with the smaller exponent comes first.
 
 Each operation's result exponent is defined by the specification. For example,
 `1.20 + 0.30` is `1.50`, and `1.2 * 1.5` is `1.80`. `Quantize` sets the exponent
