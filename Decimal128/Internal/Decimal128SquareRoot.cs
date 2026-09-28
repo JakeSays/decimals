@@ -19,13 +19,13 @@ namespace Decimals.Internal;
 /// <para>
 /// The radicand is held in four words. Its root is estimated in floating point from the
 /// top two of them, which gives fifty-three of its hundred and sixteen bits, and pulled to
-/// within one by two Newton steps, each computed from the exact difference between the
-/// radicand and the estimate's square; the last unit is settled by comparing exact
-/// squares. Nothing wider than a 64-by-64 multiply is used.
+/// between one below the root and two above it by two Newton steps, each computed from the
+/// exact difference between the radicand and the estimate's square; the last units are
+/// settled by comparing exact squares. Nothing wider than a 64-by-64 multiply is used.
 /// </para>
 /// <para>
 /// Nothing in the root's computation branches on the data: the sign of a correction is
-/// applied through a mask, and the settling compares the three candidates around the
+/// applied through a mask, and the settling compares the four candidates around the
 /// estimate at once rather than walking to the root. Whether the estimate lies above or
 /// below the root is a coin flip, and a branch on it mispredicted as often as not.
 /// </para>
@@ -112,11 +112,21 @@ internal static class Decimal128SquareRoot
     /// sixty-nine digits and fewer than seventy-one, and so a root below 10^35.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The seed is off by up to 2^65 for a root that can need a hundred and seventeen
     /// bits, so the first correction goes through two words; it leaves the estimate within
-    /// 2^16, so the second fits a word, and it leaves the estimate within one, since the
-    /// Newton iterate of a square root is never below the root and the correction is
-    /// floored from a value within a part in 2^50 of the truth.
+    /// 2^16, so the second fits a word.
+    /// </para>
+    /// <para>
+    /// The second step leaves the estimate at least one below the integer root and at most
+    /// two above it. The exact Newton iterate is never below the real root, and flooring
+    /// the correction moves the result by less than one. The correction is computed in a
+    /// double from the difference with its lowest word dropped, so its floor can also come
+    /// out one short of the exact correction's floor. That happens when the exact
+    /// correction is a whole number plus a sliver, which is the case when the real root
+    /// lies just below a whole number: for the root <c>r + 0.99999...</c>, an estimate
+    /// above it can land on <c>r + 2</c>.
+    /// </para>
     /// </remarks>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static Decimal128Integer IntegerSquareRoot(Decimal128LongInteger radicand, out bool exact)
@@ -188,17 +198,19 @@ internal static class Decimal128SquareRoot
     }
 
     /// <summary>
-    /// The root from an estimate within one of it either way: the largest of the three
-    /// candidates from one below the estimate up whose square does not exceed the
-    /// radicand. The squares come from the lowest candidate's by adding the successive odd
-    /// numbers above twice it, and the candidates that fit are counted rather than walked.
+    /// The root from an estimate between one below it and two above it: the largest of the
+    /// four candidates from two below the estimate to one above it whose square does not
+    /// exceed the radicand. The squares come from the lowest candidate's by adding the
+    /// successive odd numbers above twice it, and the candidates that fit are counted
+    /// rather than walked.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static Decimal128Integer Settle(Decimal128LongInteger radicand, Decimal128Integer estimate, out bool exact)
     {
-        var lowest = estimate - 1;
+        var lowest = estimate - 2;
         var square = Decimal128LongInteger.Square(lowest);
         var odd = Decimal128LongInteger.FromInteger(lowest + lowest + 1);
+        var two = Decimal128LongInteger.FromInteger(Decimal128Integer.FromUInt64(2));
 
         var matched = square == radicand;
         var count = 0;
@@ -207,8 +219,13 @@ internal static class Decimal128SquareRoot
         count += Unsafe.BitCast<bool, byte>(square <= radicand);
         matched |= square == radicand;
 
+        odd += two;
         square += odd;
-        square += Decimal128LongInteger.FromInteger(Decimal128Integer.FromUInt64(2));
+        count += Unsafe.BitCast<bool, byte>(square <= radicand);
+        matched |= square == radicand;
+
+        odd += two;
+        square += odd;
         count += Unsafe.BitCast<bool, byte>(square <= radicand);
         matched |= square == radicand;
 

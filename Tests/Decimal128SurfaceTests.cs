@@ -366,6 +366,28 @@ public class Decimal128SurfaceTests
     }
 
     /// <summary>
+    /// Roots that lie just below a whole number of units in the last place, such as
+    /// <c>...979.99999...</c>. These once came out one unit high in every rounding mode,
+    /// because the Newton estimate landed two above the integer root. The cases are from
+    /// the Sayed-Ahmed and Fahmy decimal128 square-root vectors.
+    /// </summary>
+    [Theory]
+    [InlineData("1209999999999999999999999999999956E4747", Decimal128Rounding.Down, "1099999999999999999999999999999979E2357")]
+    [InlineData("1209999999999999999999999999999835E151", Decimal128Rounding.Ceiling, "1099999999999999999999999999999925E59")]
+    [InlineData("1439999999999999999999999999999814E3233", Decimal128Rounding.HalfUp, "1199999999999999999999999999999922E1600")]
+    [InlineData("8999999999999999999999999999996430E-5959", Decimal128Rounding.Floor, "2999999999999999999999999999999404E-2996")]
+    [InlineData("8999999999999999999999999999995389E6111", Decimal128Rounding.HalfEven, "2999999999999999999999999999999231E3039")]
+    [InlineData("4839999999999999999999999999999912E6111", Decimal128Rounding.Floor, "2199999999999999999999999999999979E3039")]
+    public void SquareRootsJustBelowAUnitRoundCorrectly(string text, Decimal128Rounding rounding, string expected)
+    {
+        var context = new Decimal128Context(rounding);
+        var root = Decimal128.Sqrt(Decimal128.Parse(text), ref context);
+
+        Assert.Equal(Decimal128.Parse(expected).ToString(), root.ToString());
+        Assert.Equal(Decimal128Status.Inexact | Decimal128Status.Rounded, context.Status);
+    }
+
+    /// <summary>
     /// The product is kept exact until the addend has been taken in: the square of
     /// thirty-four nines less its own rounded value leaves the one that rounding took
     /// away, and two to the hundred and twenty-eighth less its rounded value leaves the
