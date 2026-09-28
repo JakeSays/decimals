@@ -170,7 +170,7 @@ public static class DecTestRunner
             return;
         }
 
-        var expected = DecimalStatus.None;
+        var expected = DecTestStatus.None;
         foreach (var condition in testCase.Conditions)
         {
             if (!DecTestConditions.TryParse(condition, out var flag))
@@ -183,7 +183,7 @@ public static class DecTestRunner
         }
 
         var operands = new TDecimal[operandCount];
-        var context = new DecimalContext(directives.Rounding);
+        var context = new DecTestContext(directives.Rounding);
 
         for (var index = 0; index < operandCount; index++)
         {
@@ -212,6 +212,17 @@ public static class DecTestRunner
                         break;
                     }
 
+                    // The copy family is defined on the bits and has to hand a non-canonical
+                    // operand back as it came. A type holding the binary-integer form cannot:
+                    // it canonicalized on the way in, so those cases are about the encoding
+                    // rather than the operation and are skipped for it.
+                    if (!TTarget.PreservesNonCanonicalEncodings && IsCopyFamily(operation)
+                        && !IsCanonical<TTarget, TDecimal>(operand.Text))
+                    {
+                        totals.AddSkip($"non-canonical encoding cannot be held by {TTarget.Name}", testCase.Id);
+                        return;
+                    }
+
                     operands[index] = TTarget.FromDpdHex(operand.Text);
 
                     if (DecTestOperations.ReportsConversionConditions(operation))
@@ -238,7 +249,7 @@ public static class DecTestRunner
         // raises Clamped. Reaching decimal64 the same value is already 1000000000000000E+369,
         // the addition folds nothing, and Clamped is correctly not raised -- the testcase
         // and the type disagree about which step owns the condition, not about the result.
-        var foldedOnConversion = context.HasRaised(DecimalStatus.Clamped);
+        var foldedOnConversion = context.HasRaised(DecTestStatus.Clamped);
 
         // Conditions raised converting operands are the operation's own only for toSci,
         // toEng, and apply, which are conversions.
@@ -325,7 +336,7 @@ public static class DecTestRunner
     private static TDecimal ExpectedEncoding<TTarget, TDecimal>(DecTestOperand result)
         where TTarget : IDecTestTarget<TTarget, TDecimal>
     {
-        var scratch = new DecimalContext();
+        var scratch = new DecTestContext();
         return TTarget.FromString(result.Text, ref scratch);
     }
 
@@ -346,19 +357,19 @@ public static class DecTestRunner
             StringComparison.Ordinal);
     }
 
-    private static string ClassText(DecimalClass value)
+    private static string ClassText(DecTestClass value)
     {
         return value switch
         {
-            DecimalClass.SignalingNaN => "sNaN",
-            DecimalClass.QuietNaN => "NaN",
-            DecimalClass.NegativeInfinity => "-Infinity",
-            DecimalClass.NegativeNormal => "-Normal",
-            DecimalClass.NegativeSubnormal => "-Subnormal",
-            DecimalClass.NegativeZero => "-Zero",
-            DecimalClass.PositiveZero => "+Zero",
-            DecimalClass.PositiveSubnormal => "+Subnormal",
-            DecimalClass.PositiveNormal => "+Normal",
+            DecTestClass.SignalingNaN => "sNaN",
+            DecTestClass.QuietNaN => "NaN",
+            DecTestClass.NegativeInfinity => "-Infinity",
+            DecTestClass.NegativeNormal => "-Normal",
+            DecTestClass.NegativeSubnormal => "-Subnormal",
+            DecTestClass.NegativeZero => "-Zero",
+            DecTestClass.PositiveZero => "+Zero",
+            DecTestClass.PositiveSubnormal => "+Subnormal",
+            DecTestClass.PositiveNormal => "+Normal",
             _ => "+Infinity"
         };
     }

@@ -30,7 +30,15 @@ public interface IDecTestTarget<TSelf, TDecimal>
     /// <summary>The width of this format's octothorpe notation: 8, 16, or 32 digits.</summary>
     static abstract int HexDigitCount { get; }
 
-    static abstract TDecimal FromString(ReadOnlySpan<char> text, ref DecimalContext context);
+    /// <summary>
+    /// Whether a non-canonical DPD encoding survives being held by the type. The corpus
+    /// expects the copy family to hand such an operand back untouched, which only a type
+    /// storing the interchange form can do; one that stores the binary-integer form
+    /// canonicalizes on the way in, and those cases are skipped for it.
+    /// </summary>
+    static abstract bool PreservesNonCanonicalEncodings { get; }
+
+    static abstract TDecimal FromString(ReadOnlySpan<char> text, ref DecTestContext context);
 
     static abstract TDecimal FromDpdHex(ReadOnlySpan<char> hex);
 
@@ -40,12 +48,12 @@ public interface IDecTestTarget<TSelf, TDecimal>
 
     static abstract string ToEngineeringString(TDecimal value);
 
-    static abstract DecimalClass Classify(TDecimal value);
+    static abstract DecTestClass Classify(TDecimal value);
 
     /// <summary>
-    /// Runs the operation. Returns false when it is not implemented yet, which is how the
-    /// runner reports honest progress while the arithmetic is still being written.
+    /// Runs the operation. Returns false when the type does not have it, which the runner
+    /// counts as a skip rather than a failure.
     /// </summary>
     static abstract bool TryApply(DecTestOperation operation, ReadOnlySpan<TDecimal> operands,
-        ref DecimalContext context, out TDecimal result);
+        ref DecTestContext context, out TDecimal result);
 }

@@ -7,8 +7,14 @@ namespace Decimals.Conformance;
 
 /// <summary>
 /// Drives <see cref="Decimal64"/> from the corpus, which reaches it through the
-/// <c>decDouble</c> group.
+/// <c>decDouble</c> group and the generated <c>d64</c> groups.
 /// </summary>
+/// <remarks>
+/// The type carries its own context, rounding, status, and class enumerations, laid out
+/// with the same values as the runner's so that the two convert by a cast. Every
+/// operation runs under a context built from the runner's and its conditions are copied
+/// back.
+/// </remarks>
 public readonly struct Decimal64Target : IDecTestTarget<Decimal64Target, Decimal64>
 {
     public static string Name => "Decimal64";
@@ -21,9 +27,15 @@ public readonly struct Decimal64Target : IDecTestTarget<Decimal64Target, Decimal
 
     public static int HexDigitCount => 16;
 
-    public static Decimal64 FromString(ReadOnlySpan<char> text, ref DecimalContext context)
+    /// <summary>The binary-integer form canonicalizes on the way in.</summary>
+    public static bool PreservesNonCanonicalEncodings => false;
+
+    public static Decimal64 FromString(ReadOnlySpan<char> text, ref DecTestContext context)
     {
-        return Decimal64.FromString(text, ref context);
+        var inner = ToInner(context);
+        var value = Decimal64.FromString(text, ref inner);
+        CopyBack(ref context, inner);
+        return value;
     }
 
     public static Decimal64 FromDpdHex(ReadOnlySpan<char> hex)
@@ -40,10 +52,19 @@ public readonly struct Decimal64Target : IDecTestTarget<Decimal64Target, Decimal
 
     public static string ToEngineeringString(Decimal64 value) => value.ToEngineeringString();
 
-    public static DecimalClass Classify(Decimal64 value) => Decimal64.Class(value);
+    public static DecTestClass Classify(Decimal64 value) => (DecTestClass)(int)Decimal64.Class(value);
 
     public static bool TryApply(DecTestOperation operation, ReadOnlySpan<Decimal64> operands,
-        ref DecimalContext context, out Decimal64 result)
+        ref DecTestContext context, out Decimal64 result)
+    {
+        var inner = ToInner(context);
+        var applied = TryApply(operation, operands, ref inner, out result);
+        CopyBack(ref context, inner);
+        return applied;
+    }
+
+    private static bool TryApply(DecTestOperation operation, ReadOnlySpan<Decimal64> operands,
+        ref Decimal64Context context, out Decimal64 result)
     {
         switch (operation)
         {
@@ -190,6 +211,18 @@ public readonly struct Decimal64Target : IDecTestTarget<Decimal64Target, Decimal
                 result = Decimal64.Zero;
                 return false;
         }
+    }
+
+    private static Decimal64Context ToInner(DecTestContext context)
+    {
+        var inner = new Decimal64Context((Decimal64Rounding)(int)context.Rounding);
+        inner.Status = (Decimal64Status)(int)context.Status;
+        return inner;
+    }
+
+    private static void CopyBack(ref DecTestContext context, Decimal64Context inner)
+    {
+        context.Status = (DecTestStatus)(int)inner.Status;
     }
 
     private static Decimal64 FromComparison(int comparison)

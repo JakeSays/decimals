@@ -1,10 +1,14 @@
 // Copyright (c) JakeSays
 // SPDX-License-Identifier: MIT
 
+using System.Globalization;
+
+
 namespace Decimals.Tests;
 
 /// <summary>
-/// Parsing and formatting, with cases taken from the ddBase testcase group.
+/// Parsing and formatting of <see cref="Decimal64"/>, with cases taken from the ddBase
+/// testcase group, and the culture and format-string surface on top of them.
 /// </summary>
 public class Decimal64TextTests
 {
@@ -70,12 +74,28 @@ public class Decimal64TextTests
     [InlineData("1234567890123456123.", "1.234567890123456E+18")]
     public void ParsingRoundsToPrecision(string text, string expected)
     {
-        var context = new DecimalContext(DecimalRounding.HalfUp);
+        var context = new Decimal64Context(Decimal64Rounding.HalfUp);
         var value = Decimal64.FromString(text, ref context);
 
         Assert.Equal(expected, value.ToString());
-        Assert.True(context.HasRaised(DecimalStatus.Inexact));
-        Assert.True(context.HasRaised(DecimalStatus.Rounded));
+        Assert.True(context.HasRaised(Decimal64Status.Inexact));
+        Assert.True(context.HasRaised(Decimal64Status.Rounded));
+    }
+
+    /// <summary>
+    /// Digits past the nineteen a word holds become a sticky residue. That is only sound
+    /// while the rounding discards digits above it, and here it always does: the digit that
+    /// decides the rounding is the seventeenth, and the sticky sits below the nineteenth.
+    /// </summary>
+    [Theory]
+    [InlineData("1234567890123456499999999999999999999", "1.234567890123456E+36")]
+    [InlineData("1234567890123456500000000000000000001", "1.234567890123457E+36")]
+    [InlineData("1234567890123456500000000000000000000", "1.234567890123456E+36")]
+    [InlineData("1234567890123457500000000000000000000", "1.234567890123458E+36")]
+    [InlineData("0.00000000000000000000000000000000000000000000000000000000000000000000000000001", "1E-77")]
+    public void LongInputRoundsCorrectly(string text, string expected)
+    {
+        Assert.Equal(expected, Decimal64.Parse(text).ToString());
     }
 
     [Theory]
@@ -116,10 +136,10 @@ public class Decimal64TextTests
     {
         Assert.False(Decimal64.TryParse(text, out _));
 
-        var context = new DecimalContext();
+        var context = new Decimal64Context();
         var value = Decimal64.FromString(text, ref context);
 
-        Assert.True(context.HasRaised(DecimalStatus.ConversionSyntax));
+        Assert.True(context.HasRaised(Decimal64Status.ConversionSyntax));
         Assert.True(Decimal64.IsNaN(value));
     }
 
@@ -163,62 +183,149 @@ public class Decimal64TextTests
     [Fact]
     public void OverflowGivesInfinityOrTheLargestFiniteByRoundingMode()
     {
-        (DecimalRounding Rounding, string Expected)[] cases =
+        (Decimal64Rounding Rounding, string Expected)[] cases =
         [
-            (DecimalRounding.HalfEven, "Infinity"),
-            (DecimalRounding.Up, "Infinity"),
-            (DecimalRounding.Ceiling, "Infinity"),
-            (DecimalRounding.Down, "9.999999999999999E+384"),
-            (DecimalRounding.Floor, "9.999999999999999E+384"),
-            (DecimalRounding.ZeroFiveUp, "9.999999999999999E+384")
+            (Decimal64Rounding.HalfEven, "Infinity"),
+            (Decimal64Rounding.Up, "Infinity"),
+            (Decimal64Rounding.Ceiling, "Infinity"),
+            (Decimal64Rounding.Down, "9.999999999999999E+384"),
+            (Decimal64Rounding.Floor, "9.999999999999999E+384"),
+            (Decimal64Rounding.ZeroFiveUp, "9.999999999999999E+384")
         ];
 
         foreach (var (rounding, expected) in cases)
         {
-            var context = new DecimalContext(rounding);
+            var context = new Decimal64Context(rounding);
             var value = Decimal64.FromString("1E+385", ref context);
 
             Assert.Equal(expected, value.ToString());
-            Assert.True(context.HasRaised(DecimalStatus.Overflow));
-            Assert.True(context.HasRaised(DecimalStatus.Inexact));
+            Assert.True(context.HasRaised(Decimal64Status.Overflow));
+            Assert.True(context.HasRaised(Decimal64Status.Inexact));
         }
     }
 
     [Fact]
     public void SubnormalValuesRaiseSubnormal()
     {
-        var context = new DecimalContext();
+        var context = new Decimal64Context();
         var value = Decimal64.FromString("1E-398", ref context);
 
         Assert.Equal("1E-398", value.ToString());
-        Assert.True(context.HasRaised(DecimalStatus.Subnormal));
-        Assert.False(context.HasRaised(DecimalStatus.Inexact));
+        Assert.True(context.HasRaised(Decimal64Status.Subnormal));
+        Assert.False(context.HasRaised(Decimal64Status.Inexact));
         Assert.True(Decimal64.IsSubnormal(value));
     }
 
     [Fact]
     public void UnderflowToZeroRaisesTheWholeChain()
     {
-        var context = new DecimalContext();
+        var context = new Decimal64Context();
         var value = Decimal64.FromString("1E-400", ref context);
 
         Assert.Equal("0E-398", value.ToString());
-        Assert.True(context.HasRaised(DecimalStatus.Subnormal));
-        Assert.True(context.HasRaised(DecimalStatus.Underflow));
-        Assert.True(context.HasRaised(DecimalStatus.Inexact));
-        Assert.True(context.HasRaised(DecimalStatus.Rounded));
+        Assert.True(context.HasRaised(Decimal64Status.Subnormal));
+        Assert.True(context.HasRaised(Decimal64Status.Underflow));
+        Assert.True(context.HasRaised(Decimal64Status.Inexact));
+        Assert.True(context.HasRaised(Decimal64Status.Rounded));
     }
 
     [Fact]
     public void LargeExponentsFoldDownAndClamp()
     {
-        // 1E+385 overflows, but 1E+384 fits once the coefficient carries the magnitude as
-        // trailing zeros, because the format's largest exponent is +369.
-        var context = new DecimalContext();
+        var context = new Decimal64Context();
         var value = Decimal64.FromString("1E+384", ref context);
 
         Assert.Equal("1.000000000000000E+384", value.ToString());
-        Assert.True(context.HasRaised(DecimalStatus.Clamped));
-        Assert.False(context.HasRaised(DecimalStatus.Inexact));
+        Assert.True(context.HasRaised(Decimal64Status.Clamped));
+        Assert.False(context.HasRaised(Decimal64Status.Inexact));
+    }
+
+    [Fact]
+    public void TryFormatMatchesToString()
+    {
+        var values = new Decimal64TestValues(20);
+        Span<char> buffer = stackalloc char[64];
+        Span<byte> utf8 = stackalloc byte[64];
+
+        for (var round = 0; round < 5000; round++)
+        {
+            var value = Decimal64.Parse(values.Next());
+            var expected = value.ToString();
+
+            // A null provider means the current culture, as it does for every .NET number,
+            // so the invariant one is named to get the specification's spellings.
+            var invariant = CultureInfo.InvariantCulture;
+
+            Assert.True(value.TryFormat(buffer, out var written, default, invariant));
+            Assert.Equal(expected, new string(buffer[..written]));
+
+            Assert.True(value.TryFormat(buffer, out written, "E", invariant));
+            Assert.Equal(value.ToEngineeringString(), new string(buffer[..written]));
+
+            Assert.True(value.TryFormat(utf8, out var bytes, default, invariant));
+            Assert.Equal(expected, System.Text.Encoding.UTF8.GetString(utf8[..bytes]));
+
+            Assert.False(value.TryFormat(buffer[..(expected.Length - 1)], out written, default, invariant));
+            Assert.Equal(0, written);
+
+            Assert.Equal(value.ToString(), Decimal64.Parse(System.Text.Encoding.UTF8.GetBytes(expected)).ToString());
+        }
+    }
+
+    [Theory]
+    [InlineData("1234.5", "de-DE", "1234,5")]
+    [InlineData("-1234.5", "de-DE", "-1234,5")]
+    [InlineData("1E+20", "de-DE", "1E+20")]
+    [InlineData("1E-20", "fr-FR", "1E-20")]
+    [InlineData("Infinity", "de-DE", "∞")]
+    [InlineData("-Infinity", "de-DE", "-∞")]
+    [InlineData("NaN", "de-DE", "NaN")]
+    public void CultureFormattingUsesTheCulturesSymbols(string text, string culture, string expected)
+    {
+        var provider = CultureInfo.GetCultureInfo(culture);
+        var value = Decimal64.Parse(text);
+
+        Assert.Equal(expected, value.ToString("G", provider));
+        Assert.Equal(expected, value.ToString(null, provider));
+    }
+
+    [Theory]
+    [InlineData("1.234,5", "de-DE", "1234.5")]
+    [InlineData("-1.234,5", "de-DE", "-1234.5")]
+    [InlineData("1 234,5", "fr-FR", "1234.5")]
+    [InlineData("  12,5  ", "de-DE", "12.5")]
+    [InlineData("1,5E+3", "de-DE", "1.5E+3")]
+    [InlineData("Infinity", "de-DE", "Infinity")]
+    [InlineData("sNaN12", "de-DE", "sNaN12")]
+    public void CultureParsingReadsTheCulturesSymbols(string text, string culture, string expected)
+    {
+        var provider = CultureInfo.GetCultureInfo(culture);
+        Assert.Equal(expected, Decimal64.Parse(text, provider).ToString());
+    }
+
+    [Theory]
+    [InlineData("1234.5678", "F2", "1234.57")]
+    [InlineData("1234.5", "F0", "1234")]
+    [InlineData("1234.5678", "N2", "1,234.57")]
+    [InlineData("-0.005", "F2", "0.00")]
+    [InlineData("-0.015", "F2", "-0.02")]
+    [InlineData("0.005", "F2", "0.00")]
+    [InlineData("1E+3", "F1", "1000.0")]
+    [InlineData("12345678.9", "N0", "12,345,679")]
+    public void FixedPointFormatsRoundHalfToEven(string text, string format, string expected)
+    {
+        var value = Decimal64.Parse(text);
+        Assert.Equal(expected, value.ToString(format, CultureInfo.InvariantCulture));
+    }
+
+    [Fact]
+    public void OtherStandardFormatsGoThroughDouble()
+    {
+        var value = Decimal64.Parse("1234.5678");
+        Assert.Equal(1234.5678.ToString("C2", CultureInfo.InvariantCulture),
+            value.ToString("C2", CultureInfo.InvariantCulture));
+
+        Assert.Equal(1234.5678.ToString("P1", CultureInfo.InvariantCulture),
+            value.ToString("P1", CultureInfo.InvariantCulture));
     }
 }

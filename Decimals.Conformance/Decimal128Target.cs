@@ -7,8 +7,14 @@ namespace Decimals.Conformance;
 
 /// <summary>
 /// Drives <see cref="Decimal128"/> from the corpus, which reaches it through the
-/// <c>decQuad</c> group.
+/// <c>decQuad</c> group and the generated <c>d128</c> groups.
 /// </summary>
+/// <remarks>
+/// The type carries its own context, rounding, status, and class enumerations, laid out
+/// with the same values as the runner's so that the two convert by a cast. Every
+/// operation runs under a context built from the runner's and its conditions are copied
+/// back.
+/// </remarks>
 public readonly struct Decimal128Target : IDecTestTarget<Decimal128Target, Decimal128>
 {
     public static string Name => "Decimal128";
@@ -21,9 +27,15 @@ public readonly struct Decimal128Target : IDecTestTarget<Decimal128Target, Decim
 
     public static int HexDigitCount => 32;
 
-    public static Decimal128 FromString(ReadOnlySpan<char> text, ref DecimalContext context)
+    /// <summary>The binary-integer form canonicalizes on the way in.</summary>
+    public static bool PreservesNonCanonicalEncodings => false;
+
+    public static Decimal128 FromString(ReadOnlySpan<char> text, ref DecTestContext context)
     {
-        return Decimal128.FromString(text, ref context);
+        var inner = ToInner(context);
+        var value = Decimal128.FromString(text, ref inner);
+        CopyBack(ref context, inner);
+        return value;
     }
 
     public static Decimal128 FromDpdHex(ReadOnlySpan<char> hex)
@@ -40,10 +52,19 @@ public readonly struct Decimal128Target : IDecTestTarget<Decimal128Target, Decim
 
     public static string ToEngineeringString(Decimal128 value) => value.ToEngineeringString();
 
-    public static DecimalClass Classify(Decimal128 value) => Decimal128.Class(value);
+    public static DecTestClass Classify(Decimal128 value) => (DecTestClass)(int)Decimal128.Class(value);
 
     public static bool TryApply(DecTestOperation operation, ReadOnlySpan<Decimal128> operands,
-        ref DecimalContext context, out Decimal128 result)
+        ref DecTestContext context, out Decimal128 result)
+    {
+        var inner = ToInner(context);
+        var applied = TryApply(operation, operands, ref inner, out result);
+        CopyBack(ref context, inner);
+        return applied;
+    }
+
+    private static bool TryApply(DecTestOperation operation, ReadOnlySpan<Decimal128> operands,
+        ref Decimal128Context context, out Decimal128 result)
     {
         switch (operation)
         {
@@ -190,6 +211,18 @@ public readonly struct Decimal128Target : IDecTestTarget<Decimal128Target, Decim
                 result = Decimal128.Zero;
                 return false;
         }
+    }
+
+    private static Decimal128Context ToInner(DecTestContext context)
+    {
+        var inner = new Decimal128Context((Decimal128Rounding)(int)context.Rounding);
+        inner.Status = (Decimal128Status)(int)context.Status;
+        return inner;
+    }
+
+    private static void CopyBack(ref DecTestContext context, Decimal128Context inner)
+    {
+        context.Status = (DecTestStatus)(int)inner.Status;
     }
 
     private static Decimal128 FromComparison(int comparison)

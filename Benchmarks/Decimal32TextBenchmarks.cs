@@ -1,0 +1,138 @@
+// Copyright (c) JakeSays
+// SPDX-License-Identifier: MIT
+
+using System.Globalization;
+using System.Runtime.InteropServices;
+
+using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Configs;
+using Decimals.Internal;
+
+
+namespace Decimals.Benchmarks;
+
+/// <summary>
+/// The pieces underneath formatting a <see cref="Decimal32"/>, timed one at a time: planning
+/// the layout, writing the digits, looking up the culture, and the whole operation under
+/// each provider. This is what says where a nanosecond of formatting goes.
+/// </summary>
+[GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
+[CategoriesColumn]
+public class Decimal32TextBenchmarks
+{
+    private uint[] _bits = [];
+    private Decimal32[] _values = [];
+
+    [GlobalSetup]
+    public void Setup()
+    {
+        _values = new Decimal32[BenchmarkValues.Count];
+        _bits = new uint[BenchmarkValues.Count];
+        for (var index = 0; index < BenchmarkValues.Count; index++)
+        {
+            _values[index] = Decimal32.Parse(BenchmarkValues.Short32Text[index]);
+            _bits[index] = _values[index].ToBits();
+        }
+    }
+
+    [BenchmarkCategory("pieces")]
+    [Benchmark(Baseline = true, OperationsPerInvoke = BenchmarkValues.Count)]
+    public int PlanOnly()
+    {
+        var total = 0;
+        for (var index = 0; index < BenchmarkValues.Count; index++)
+        {
+            var coefficient = Decimal32Encoding.Unpack(_bits[index], out var exponent);
+            var layout = Decimal32TextLayout.Plan(coefficient, exponent, false);
+            total += layout.Length(false, 1, 1, 1);
+        }
+
+        return total;
+    }
+
+    [BenchmarkCategory("pieces")]
+    [Benchmark(OperationsPerInvoke = BenchmarkValues.Count)]
+    public int PlanAndWrite()
+    {
+        Span<char> buffer = stackalloc char[64];
+        var total = 0;
+        for (var index = 0; index < BenchmarkValues.Count; index++)
+        {
+            var coefficient = Decimal32Encoding.Unpack(_bits[index], out var exponent);
+            var layout = Decimal32TextLayout.Plan(coefficient, exponent, false);
+            total += layout.Write(buffer, Decimal32Encoding.IsNegative(_bits[index]));
+        }
+
+        return total;
+    }
+
+    [BenchmarkCategory("pieces")]
+    [Benchmark(OperationsPerInvoke = BenchmarkValues.Count)]
+    public int PlanAndWriteWide()
+    {
+        Span<char> buffer = stackalloc char[64];
+        var total = 0;
+        for (var index = 0; index < BenchmarkValues.Count; index++)
+        {
+            var coefficient = Decimal32Encoding.Unpack(_bits[index], out var exponent);
+            var layout = Decimal32TextLayout.Plan(coefficient, exponent, false);
+            total += layout.WriteWide(ref MemoryMarshal.GetReference(buffer), Decimal32Encoding.IsNegative(_bits[index]));
+        }
+
+        return total;
+    }
+
+    [BenchmarkCategory("pieces")]
+    [Benchmark(OperationsPerInvoke = BenchmarkValues.Count)]
+    public int CurrentCultureLookup()
+    {
+        var total = 0;
+        for (var index = 0; index < BenchmarkValues.Count; index++)
+        {
+            total += NumberFormatInfo.GetInstance(null).NegativeSign.Length;
+        }
+
+        return total;
+    }
+
+    [BenchmarkCategory("whole")]
+    [Benchmark(Baseline = true, OperationsPerInvoke = BenchmarkValues.Count)]
+    public int TryFormatNullProvider()
+    {
+        Span<char> buffer = stackalloc char[64];
+        var written = 0;
+        for (var index = 0; index < BenchmarkValues.Count; index++)
+        {
+            _values[index].TryFormat(buffer, out written, default, null);
+        }
+
+        return written;
+    }
+
+    [BenchmarkCategory("whole")]
+    [Benchmark(OperationsPerInvoke = BenchmarkValues.Count)]
+    public int TryFormatInvariantProvider()
+    {
+        Span<char> buffer = stackalloc char[64];
+        var written = 0;
+        for (var index = 0; index < BenchmarkValues.Count; index++)
+        {
+            _values[index].TryFormat(buffer, out written, default, CultureInfo.InvariantCulture);
+        }
+
+        return written;
+    }
+
+    [BenchmarkCategory("whole")]
+    [Benchmark(OperationsPerInvoke = BenchmarkValues.Count)]
+    public string ToStringAllocating()
+    {
+        var result = string.Empty;
+        for (var index = 0; index < BenchmarkValues.Count; index++)
+        {
+            result = _values[index].ToString();
+        }
+
+        return result;
+    }
+}

@@ -12,7 +12,7 @@ public sealed class DecTestDirectives
 {
     public int Precision { get; private set; }
 
-    public DecimalRounding Rounding { get; private set; } = DecimalRounding.HalfEven;
+    public DecTestRounding Rounding { get; private set; } = DecTestRounding.HalfEven;
 
     public int MaxExponent { get; private set; }
 
@@ -116,34 +116,34 @@ public sealed class DecTestDirectives
         return true;
     }
 
-    private static bool TryParseRounding(string name, out DecimalRounding rounding)
+    private static bool TryParseRounding(string name, out DecTestRounding rounding)
     {
-        rounding = DecimalRounding.HalfEven;
+        rounding = DecTestRounding.HalfEven;
         switch (name)
         {
             case "ceiling":
-                rounding = DecimalRounding.Ceiling;
+                rounding = DecTestRounding.Ceiling;
                 return true;
             case "down":
-                rounding = DecimalRounding.Down;
+                rounding = DecTestRounding.Down;
                 return true;
             case "floor":
-                rounding = DecimalRounding.Floor;
+                rounding = DecTestRounding.Floor;
                 return true;
             case "half_down":
-                rounding = DecimalRounding.HalfDown;
+                rounding = DecTestRounding.HalfDown;
                 return true;
             case "half_even":
-                rounding = DecimalRounding.HalfEven;
+                rounding = DecTestRounding.HalfEven;
                 return true;
             case "half_up":
-                rounding = DecimalRounding.HalfUp;
+                rounding = DecTestRounding.HalfUp;
                 return true;
             case "up":
-                rounding = DecimalRounding.Up;
+                rounding = DecTestRounding.Up;
                 return true;
             case "05up":
-                rounding = DecimalRounding.ZeroFiveUp;
+                rounding = DecTestRounding.ZeroFiveUp;
                 return true;
             default:
                 return false;

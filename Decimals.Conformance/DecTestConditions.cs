@@ -9,38 +9,38 @@ namespace Decimals.Conformance;
 
 /// <summary>
 /// Translates between the condition names on a testcase line and
-/// <see cref="DecimalStatus"/>.
+/// <see cref="DecTestStatus"/>.
 /// </summary>
 public static class DecTestConditions
 {
-    private static readonly (string Name, DecimalStatus Flag)[] Known =
+    private static readonly (string Name, DecTestStatus Flag)[] Known =
     [
-        ("clamped", DecimalStatus.Clamped),
-        ("conversion_syntax", DecimalStatus.ConversionSyntax),
-        ("division_by_zero", DecimalStatus.DivisionByZero),
-        ("division_impossible", DecimalStatus.DivisionImpossible),
-        ("division_undefined", DecimalStatus.DivisionUndefined),
-        ("inexact", DecimalStatus.Inexact),
-        ("invalid_operation", DecimalStatus.InvalidOperation),
-        ("overflow", DecimalStatus.Overflow),
-        ("rounded", DecimalStatus.Rounded),
-        ("subnormal", DecimalStatus.Subnormal),
-        ("underflow", DecimalStatus.Underflow)
+        ("clamped", DecTestStatus.Clamped),
+        ("conversion_syntax", DecTestStatus.ConversionSyntax),
+        ("division_by_zero", DecTestStatus.DivisionByZero),
+        ("division_impossible", DecTestStatus.DivisionImpossible),
+        ("division_undefined", DecTestStatus.DivisionUndefined),
+        ("inexact", DecTestStatus.Inexact),
+        ("invalid_operation", DecTestStatus.InvalidOperation),
+        ("overflow", DecTestStatus.Overflow),
+        ("rounded", DecTestStatus.Rounded),
+        ("subnormal", DecTestStatus.Subnormal),
+        ("underflow", DecTestStatus.Underflow)
     ];
 
-    private static readonly FrozenDictionary<string, DecimalStatus> ByName =
+    private static readonly FrozenDictionary<string, DecTestStatus> ByName =
         Known.ToFrozenDictionary(entry => entry.Name, entry => entry.Flag, StringComparer.Ordinal);
 
     /// <summary>Condition names are case-independent.</summary>
-    public static bool TryParse(string name, out DecimalStatus flag)
+    public static bool TryParse(string name, out DecTestStatus flag)
     {
         return ByName.TryGetValue(name.ToLowerInvariant(), out flag);
     }
 
     /// <summary>Renders a status word as its condition names, for failure reports.</summary>
-    public static string Describe(DecimalStatus status)
+    public static string Describe(DecTestStatus status)
     {
-        if (status == DecimalStatus.None)
+        if (status == DecTestStatus.None)
         {
             return "(none)";
         }

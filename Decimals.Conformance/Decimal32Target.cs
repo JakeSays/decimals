@@ -7,8 +7,14 @@ namespace Decimals.Conformance;
 
 /// <summary>
 /// Drives <see cref="Decimal32"/> from the corpus, which reaches it through the
-/// <c>decSingle</c> group.
+/// <c>decSingle</c> group and the generated <c>d32</c> groups.
 /// </summary>
+/// <remarks>
+/// The type carries its own context, rounding, status, and class enumerations, laid out
+/// with the same values as the runner's so that the two convert by a cast. Every
+/// operation runs under a context built from the runner's and its conditions are copied
+/// back.
+/// </remarks>
 public readonly struct Decimal32Target : IDecTestTarget<Decimal32Target, Decimal32>
 {
     public static string Name => "Decimal32";
@@ -21,9 +27,15 @@ public readonly struct Decimal32Target : IDecTestTarget<Decimal32Target, Decimal
 
     public static int HexDigitCount => 8;
 
-    public static Decimal32 FromString(ReadOnlySpan<char> text, ref DecimalContext context)
+    /// <summary>The binary-integer form canonicalizes on the way in.</summary>
+    public static bool PreservesNonCanonicalEncodings => false;
+
+    public static Decimal32 FromString(ReadOnlySpan<char> text, ref DecTestContext context)
     {
-        return Decimal32.FromString(text, ref context);
+        var inner = ToInner(context);
+        var value = Decimal32.FromString(text, ref inner);
+        CopyBack(ref context, inner);
+        return value;
     }
 
     public static Decimal32 FromDpdHex(ReadOnlySpan<char> hex)
@@ -40,10 +52,19 @@ public readonly struct Decimal32Target : IDecTestTarget<Decimal32Target, Decimal
 
     public static string ToEngineeringString(Decimal32 value) => value.ToEngineeringString();
 
-    public static DecimalClass Classify(Decimal32 value) => Decimal32.Class(value);
+    public static DecTestClass Classify(Decimal32 value) => (DecTestClass)(int)Decimal32.Class(value);
 
     public static bool TryApply(DecTestOperation operation, ReadOnlySpan<Decimal32> operands,
-        ref DecimalContext context, out Decimal32 result)
+        ref DecTestContext context, out Decimal32 result)
+    {
+        var inner = ToInner(context);
+        var applied = TryApply(operation, operands, ref inner, out result);
+        CopyBack(ref context, inner);
+        return applied;
+    }
+
+    private static bool TryApply(DecTestOperation operation, ReadOnlySpan<Decimal32> operands,
+        ref Decimal32Context context, out Decimal32 result)
     {
         switch (operation)
         {
@@ -190,6 +211,18 @@ public readonly struct Decimal32Target : IDecTestTarget<Decimal32Target, Decimal
                 result = Decimal32.Zero;
                 return false;
         }
+    }
+
+    private static Decimal32Context ToInner(DecTestContext context)
+    {
+        var inner = new Decimal32Context((Decimal32Rounding)(int)context.Rounding);
+        inner.Status = (Decimal32Status)(int)context.Status;
+        return inner;
+    }
+
+    private static void CopyBack(ref DecTestContext context, Decimal32Context inner)
+    {
+        context.Status = (DecTestStatus)(int)inner.Status;
     }
 
     private static Decimal32 FromComparison(int comparison)

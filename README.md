@@ -1,14 +1,12 @@
 # Decimals
 
-IEEE 754 decimal floating point for .NET: `Decimal32`, `Decimal64`, and `Decimal128`, in
-managed C# with no native dependency.
+IEEE 754 decimal floating-point types for .NET: `Decimal32`, `Decimal64`, and `Decimal128`.
+Written in C# with no native dependencies. Requires .NET 10.
 
-These are real decimal floating-point types. Unlike `System.Decimal` they carry an exponent
-rather than a fixed scale, so they span the full IEEE range and behave the way `double`
-does about overflow, underflow, infinities, and NaNs -- in base ten, where `0.1 + 0.2` is
-exactly `0.3`. Unlike `double` they hold decimal fractions exactly, and they keep the
-*quantum*: `1.0` and `1.00` are the same number written to different precision, and the
-arithmetic says which one you get back.
+Each value has a sign, an integer coefficient, and a base-ten exponent. Decimal fractions
+such as `0.1` are stored exactly, so `0.1 + 0.2` equals `0.3`. The exponent range covers
+the full IEEE 754 range, including subnormals, infinities, and NaNs. This differs from
+`System.Decimal`, which has a fixed scale and no special values.
 
 ```csharp
 using Decimals;
@@ -22,31 +20,25 @@ Console.WriteLine(total / 7);         // 8.567142857142857
 Console.WriteLine(Decimal64.Sqrt(2)); // 1.414213562373095
 ```
 
-Requires .NET 10.
+## Background
 
-## Origins
+The arithmetic follows Mike Cowlishaw's General Decimal Arithmetic Specification, which
+became the decimal part of IEEE 754-2008 and IEEE 754-2019. The specification, the
+encodings, and the test suite are published at <https://speleotrove.com/decimal/>.
 
-The arithmetic implemented here is Mike Cowlishaw's **decimal arithmetic specification**,
-the document that became the decimal half of IEEE 754-2008 and IEEE 754-2019. The
-specification, the encodings, the reference implementation, and the test suite all live at
-**<https://speleotrove.com/decimal/>**.
+The reference implementation is decNumber, a C library by the same author
+(<https://speleotrove.com/decimal/#decNumber>). It provides an arbitrary-precision engine
+and three fixed-size types: `decSingle`, `decDouble`, and `decQuad`. The types in this
+repository follow the fixed-size design. A value is a small struct, and the arithmetic
+does not allocate.
 
-The reference implementation is **decNumber**, a C library by the same author:
-**<https://speleotrove.com/decimal/#decNumber>**. It offers two routes to the same
-arithmetic -- an arbitrary-precision engine (`decNumber`) and fixed-format types operating
-directly on the encodings (`decSingle`, `decDouble`, `decQuad`). This library is modeled on
-the second: a fixed-size value the JIT can keep in registers, with no allocation on any
-arithmetic path.
+Correctness is tested against decNumber's `.decTest` files. See [Testing](#testing).
 
-Correctness is measured against the same corpus decNumber uses, the `.decTest` files
-published on that site. Every case for the three formats runs on every build. See
-[Testing](#testing) below.
+Some operations are renamed to follow .NET conventions. For example, `to-number` is
+`Parse`, `to-scientific-string` is `ToString`, `remainder-near` is `RemainderNear`, and
+`or` is `Or`.
 
-The specification uses its own vocabulary, and this library keeps the concepts while
-renaming them for .NET: `to-number` is `Parse`, `to-scientific-string` is `ToString`,
-`remainder-near` is `RemainderNear`, and `decFloatOrOp` is `Or`.
-
-## The three formats
+## Formats
 
 | | `Decimal32` | `Decimal64` | `Decimal128` |
 | --- | --- | --- | --- |
@@ -58,106 +50,120 @@ renaming them for .NET: `to-number` is `Parse`, `to-scientific-string` is `ToStr
 | largest finite | 9.999999E+96 | 9.999999999999999E+384 | 9.999999999999999999999999999999999E+6144 |
 | smallest subnormal | 1E-101 | 1E-398 | 1E-6176 |
 
-A value is `(-1)^sign x coefficient x 10^exponent`. `Decimal32` is a storage and interchange
-format in the specification rather than an arithmetic one -- decNumber gives it no
-arithmetic at all -- but it has full arithmetic here.
+A value equals `(-1)^sign x coefficient x 10^exponent`. The specification defines
+decimal32 as a storage format only, and decNumber has no arithmetic for it. `Decimal32`
+here supports the same arithmetic as the other two types.
 
-## Using the types
+Each format is a separate project (`Decimal32/`, `Decimal64/`, `Decimal128/`) with no
+dependency on the others. Each has its own context, rounding, status, and class types,
+for example `Decimal64Context` and `Decimal64Rounding`. The examples below use
+`Decimal64`. The other two types have the same members.
 
-### Making values
+## Usage
+
+### Creating values
 
 ```csharp
 var fromText = Decimal64.Parse("1.05");
-var fromInt = (Decimal64)42;                  // implicit for int and narrower
-var fromLong = (Decimal64)9223372036854775807L; // explicit: 19 digits into 16
-var widened = (Decimal128)fromText;           // implicit: narrow to wide is exact
-var narrowed = (Decimal32)fromText;           // explicit: rounds
+var fromInt = (Decimal64)42;                        // implicit
+var fromLong = (Decimal64)9223372036854775807L;     // explicit, rounds to 16 digits
+var widened = Decimal128.CreateChecked(fromText);   // exact
+var narrowed = Decimal32.CreateChecked(fromText);   // may round
 ```
 
-Widening between the three formats is implicit and exact, quantum included -- a `Decimal32`
-`1.000` arrives as `1.000`, not `1`. Narrowing is explicit, because it rounds and can
-overflow to an infinity or underflow to a subnormal.
+Conversion from an integer type is implicit when every value of that type fits in the
+format's precision:
 
-Integer types up to ten digits convert implicitly; `long`, `ulong`, `Int128`, and `UInt128`
-are explicit because they can carry more digits than the format holds. Conversions *to* an
-integer truncate toward zero and throw `OverflowException` if the value will not fit, which
-is what `System.Decimal` does. `System.Decimal` itself has no cast in either direction on
-purpose: it holds 28 digits against a single scale, so neither direction is a clean fit. Use
-`Decimal64.CreateChecked(someDecimal)` when you want it.
+| format | implicit from |
+| --- | --- |
+| `Decimal32` | `sbyte`, `byte`, `short`, `ushort`, `char` |
+| `Decimal64` | the above, plus `int` and `uint` |
+| `Decimal128` | the above, plus `long` and `ulong` |
 
-### Binary floats have two readings
+Conversion from any other integer type is explicit. Conversion to an integer truncates
+toward zero and throws `OverflowException` if the result does not fit.
+
+There are no cast operators between the three formats, and none to or from
+`System.Decimal`. Use `CreateChecked`, `CreateSaturating`, or `CreateTruncating` instead.
+Converting to a wider decimal format is exact and keeps the exponent. Converting to a
+narrower one rounds.
+
+### Converting from binary floating point
 
 ```csharp
 var shortest = (Decimal128)0.1;   // 0.1
-var exact = Decimal128.FromBinary(0.1, BinaryConversion.ExactValue);
+var exact = Decimal128.FromBinary(0.1, Decimal128BinaryConversion.ExactValue);
 // 0.1000000000000000055511151231257827
 ```
 
-The cast takes the shortest text that round-trips the `double`, so `0.1` becomes the decimal
-one tenth -- almost always what the writer meant. `BinaryConversion.ExactValue` gives IEEE
-754's `convertFormat` instead: the binary value itself, which is a whole number times a power
-of two and therefore has an exact decimal form. It takes all 34 digits to see it -- the same
-call on `Decimal64` rounds to `0.1000000000000000`, since sixteen digits cannot show where a
-`double` stops being a tenth.
+The cast operator uses the shortest decimal string that converts back to the same
+`double`. For `0.1`, that is `0.1`.
+
+`FromBinary` with `ExactValue` converts the exact binary value instead, rounded to the
+format's precision. This is IEEE 754 `convertFormat`. `Decimal128` shows the binary error
+in `0.1` because it has 34 digits. `Decimal64` gives `0.1000000000000000` because the
+error is beyond its 16 digits.
 
 ### Arithmetic
 
-Operators round half to even and discard the status flags, which is IEEE 754 default
-exception handling:
+Operators round half to even and do not report status. This is IEEE 754 default exception
+handling.
 
 ```csharp
 var sum = a + b;
 var quotient = a / b;
-var scaled = Decimal64.FusedMultiplyAdd(a, b, c);   // rounded once, not twice
+var scaled = Decimal64.FusedMultiplyAdd(a, b, c);   // one rounding
 var root = Decimal64.Sqrt(a);
 var power = Decimal64.Pow(a, b);
 ```
 
-Every operation also has an overload taking a `DecimalContext` by reference, which is how
-you choose a rounding mode and find out what happened:
+Every operation has an overload that takes a context by reference. Use it to set the
+rounding mode or to read the status flags:
 
 ```csharp
-var context = new DecimalContext(DecimalRounding.Ceiling);
+var context = new Decimal64Context(Decimal64Rounding.Ceiling);
 var quotient = Decimal64.Divide(dividend, divisor, ref context);
 
-if (context.HasRaised(DecimalStatus.Inexact))
+if (context.HasRaised(Decimal64Status.Inexact))
 {
-    // the quotient did not divide evenly
+    // the result was rounded
 }
 ```
 
-`DecimalRounding` has all eight of the specification's modes: `Ceiling`, `Down`, `Floor`,
-`HalfDown`, `HalfEven`, `HalfUp`, `Up`, and `ZeroFiveUp`.
+Rounding modes: `Ceiling`, `Down`, `Floor`, `HalfDown`, `HalfEven`, `HalfUp`, `Up`, and
+`ZeroFiveUp`.
 
-`DecimalStatus` accumulates across calls until you clear it, so you can run a whole
-calculation and ask once at the end. It carries the five IEEE exceptions -- `InvalidOperation`,
-`DivisionByZero`, `Overflow`, `Underflow`, `Inexact` -- and the specification's additional
-conditions: `ConversionSyntax`, `DivisionImpossible`, `DivisionUndefined`, `Clamped`,
-`Rounded`, and `Subnormal`.
+Status flags stay set until `ClearStatus` is called, so one check after a sequence of
+operations reports everything raised during it. The flags are the five IEEE 754
+exceptions (`InvalidOperation`, `DivisionByZero`, `Overflow`, `Underflow`, `Inexact`) and
+the specification's additional conditions (`ConversionSyntax`, `DivisionImpossible`,
+`DivisionUndefined`, `Clamped`, `Rounded`, `Subnormal`).
 
-### The quantum is part of the value
+### Exponent and quantum
 
-This is the thing that surprises people arriving from `double`:
+`1` and `1.00` are equal in value but have different exponents. The exponent is called the
+*quantum*, and it is part of the stored value:
 
 ```csharp
 var one = Decimal64.Parse("1");
 var alsoOne = Decimal64.Parse("1.00");
 
-one == alsoOne             // true  -- same number
-one.Equals(alsoOne)        // true
-one.ToString()             // "1"
-alsoOne.ToString()         // "1.00"
-one.ToBits() == alsoOne.ToBits()          // false -- different encodings
-Decimal64.CompareTotal(one, alsoOne)      // > 0   -- the total order separates them
+one == alsoOne                          // true
+one.Equals(alsoOne)                     // true
+one.ToString()                          // "1"
+alsoOne.ToString()                      // "1.00"
+one.ToBits() == alsoOne.ToBits()        // false
+Decimal64.CompareTotal(one, alsoOne)    // > 0
 ```
 
-Those two are members of one *cohort*: the same value at different precision. Equality,
-ordering, and hashing are numeric, so a cohort is one key in a dictionary and sorts as one
-value. `CompareTotal` is the IEEE total order, which separates them, and `ToBits` shows why.
+Values that are equal but have different exponents form a *cohort*. Equality, ordering,
+and hashing compare numeric value, so all members of a cohort are equal as dictionary
+keys and when sorted. `CompareTotal` is the IEEE 754 total order, which also orders by
+exponent.
 
-Arithmetic decides which cohort member comes out, by rules the specification lays down
-exactly -- `1.20 + 0.30` is `1.50`, and `1.2 * 1.5` is `1.80`. `Quantize` sets the quantum
-deliberately, and `Reduce` and `Trim` strip trailing zeros:
+Each operation's result exponent is defined by the specification. For example,
+`1.20 + 0.30` is `1.50`, and `1.2 * 1.5` is `1.80`. `Quantize` sets the exponent
+explicitly. `Reduce` and `Trim` remove trailing zeros.
 
 ```csharp
 var money = Decimal64.Quantize(total, Decimal64.Parse("0.01"), ref context);  // two places
@@ -165,47 +171,40 @@ var money = Decimal64.Quantize(total, Decimal64.Parse("0.01"), ref context);  //
 
 ### Comparison
 
-`==`, `<`, `>`, `<=`, `>=` are numeric and leave NaN unordered, exactly as IEEE 754 says --
-every one of them is false when either side is a NaN, including a NaN against itself.
+The operators `==`, `!=`, `<`, `>`, `<=`, and `>=` compare numeric value and follow
+IEEE 754. Every comparison involving a NaN is false, except `!=`, which is true.
 
-`Equals`, `GetHashCode`, and `CompareTo` have to place every value somewhere, so they follow
-.NET convention instead: a NaN equals a NaN and sorts below everything. That is the same
-split `double` makes, and it is what lets these types work in collections.
+`Equals`, `GetHashCode`, and `CompareTo` follow .NET conventions instead. A NaN equals
+another NaN and sorts before all other values. `double` works the same way, and this is
+what allows the types to be used in collections.
 
-`CompareTotal` and `CompareTotalMagnitude` are the IEEE total order, which orders NaNs,
-signs, and cohort members. `Compare` and `CompareSignal` are the specification's numeric
-comparison, returning a decimal that may itself be NaN.
+`CompareTotal` and `CompareTotalMagnitude` implement the IEEE 754 total order, which
+orders NaNs, signs, and cohort members. `Compare` and `CompareSignal` implement the
+specification's comparison and return a decimal: -1, 0, 1, or NaN.
 
 ### Text
 
 ```csharp
-value.ToString()                                 // the specification's scientific form
-value.ToEngineeringString()                      // exponent a multiple of three
+value.ToString()                                    // scientific form
+value.ToEngineeringString()                         // exponent is a multiple of three
 value.ToString("F2", CultureInfo.InvariantCulture)
 value.ToString("G", CultureInfo.GetCultureInfo("de-DE"))   // 1234,5
 
-Decimal64.Parse("1.05");                         // the specification's grammar
+Decimal64.Parse("1.05");
 Decimal64.Parse("1.234,5", CultureInfo.GetCultureInfo("de-DE"));
-Decimal64.TryParse("1.05"u8, out var fromUtf8);  // UTF-8 too
+Decimal64.TryParse("1.05"u8, out var fromUtf8);     // UTF-8 input
 ```
 
-There are two grammars, and which one runs is decided by whether you passed an
-`IFormatProvider` -- never by ambient state.
+Methods without an `IFormatProvider` use the specification's format. It does not depend
+on `CultureInfo.CurrentCulture`. This applies to `ToString()`, `ToScientificString`,
+`ToEngineeringString`, and `Parse` and `TryParse` without a provider. Note that this
+differs from other .NET numeric types, where `ToString()` uses the current culture.
 
-**Without a provider** you get the specification's, which is invariant by definition and
-unaffected by `CultureInfo.CurrentCulture`: `ToString()`, `ToScientificString`,
-`ToEngineeringString`, and the no-provider `Parse` and `TryParse`. This is the canonical text
-of a value, and it is the one departure from .NET convention worth knowing about --
-`ToString()` here is *not* `ToString(null, CurrentCulture)`, because a thread's locale must
-not change what a value looks like on the wire.
+Methods with an `IFormatProvider` use that provider's separators, signs, and currency
+symbols, and accept `NumberStyles`. The default style is `Float | AllowThousands`.
+`Infinity`, `sNaN`, and NaN payloads are also accepted with a provider.
 
-**With a provider**, separators, signs, currency symbols, and `NumberStyles` are all honored,
-defaulting to `Float | AllowThousands` like the built-in types. The specification's own
-spellings survive that path too, since no culture has words for them: `Infinity`, `sNaN`, and
-NaN payloads all still parse.
-
-Note that `"E"` is the *engineering* form here rather than .NET's exponential one -- the
-specification has an engineering notation and .NET has no specifier for it.
+The `"E"` format specifier produces engineering notation, not .NET exponential notation.
 
 ### Encoding
 
@@ -213,34 +212,40 @@ specification has an engineering notation and .NET has no specifier for it.
 var bits = value.ToBits();                  // uint, ulong, or UInt128
 var restored = Decimal64.FromBits(bits);
 
-var interchange = value.ToDpdBits();        // densely packed decimal, the stored form
-var fromWire = Decimal64.FromDpdBits(interchange);
-
-var binary = value.ToBidBits();             // binary integer decimal, a conversion
+var binary = value.ToBidBits();             // BID, same as ToBits
 var fromBinary = Decimal64.FromBidBits(binary);
+
+var interchange = value.ToDpdBits();        // DPD
+var fromWire = Decimal64.FromDpdBits(interchange);
 ```
 
-The in-memory encoding is **DPD** (densely packed decimal), three digits to a ten-bit
-declet, which is what decimal hardware and decNumber exchange -- so `ToBits` and
-`ToDpdBits` agree and neither costs anything. `ToBidBits` and `FromBidBits` reach the
-**BID** (binary integer decimal) form, where the coefficient is a plain binary integer.
-IEEE 754 permits either for decimal interchange formats; both are implemented and the
-corpus checks the conversion bit for bit.
+Values are stored in the BID (binary integer decimal) encoding, where the coefficient is
+a binary integer. `ToBits` and `ToBidBits` return the stored bits. `ToDpdBits` and
+`FromDpdBits` convert to and from the DPD (densely packed decimal) encoding, which stores
+three decimal digits in each 10-bit group. decNumber and decimal hardware use DPD. IEEE
+754 allows either encoding.
 
-Storing the interchange form means a non-canonical encoding survives being held, which is
-what IEEE `copy` requires of it, and makes `Canonical` a real operation.
+A BID encoding whose coefficient exceeds the format's maximum is non-canonical. IEEE 754
+defines its value as zero. `FromBits` stores such an encoding unchanged, and arithmetic
+treats it as zero. `IsCanonical` detects it, and `Canonical` converts it to the canonical
+encoding. `FromDpdBits` always produces a canonical encoding.
 
 ### Elementary functions and generic math
 
-`Sqrt`, `Exp`, `Log`, `Log10`, and `Pow` are implemented directly and checked against the
-corpus. `Exp2`, `Exp10`, `Cbrt`, `RootN`, `Hypot`, `Log2`, and the `M1`/`P1` variants reduce
-to those.
+`Sqrt`, `Exp`, `Log`, `Log10`, and `Pow` are implemented directly and tested against the
+corpus. `Exp2`, `Exp10`, `Cbrt`, `RootN`, `Hypot`, `Log2`, `ExpM1`, `LogP1`, and the
+related functions are computed from those.
 
-Each type implements `IFloatingPoint<T>`, `INumber<T>`, `INumberBase<T>`, `ISignedNumber<T>`,
-`IFloatingPointConstants<T>`, `IMinMaxValue<T>`, `IExponentialFunctions<T>`,
-`ILogarithmicFunctions<T>`, `IPowerFunctions<T>`, `IRootFunctions<T>`, and the text and
-ordering contracts including `IUtf8SpanFormattable` and `IUtf8SpanParsable<T>`. So generic
-numeric code works:
+Each type implements:
+
+- `IFloatingPoint<T>`, which includes `INumber<T>`, `INumberBase<T>`, `ISignedNumber<T>`,
+  and `IFloatingPointConstants<T>`
+- `IMinMaxValue<T>`
+- `IExponentialFunctions<T>`, `ILogarithmicFunctions<T>`, `IPowerFunctions<T>`, and
+  `IRootFunctions<T>`
+- `IUtf8SpanFormattable` and `IUtf8SpanParsable<T>`
+
+Generic numeric code works with all three types:
 
 ```csharp
 static T Mean<T>(ReadOnlySpan<T> values)
@@ -258,119 +263,137 @@ static T Mean<T>(ReadOnlySpan<T> values)
 var average = Mean<Decimal64>(samples);
 ```
 
-## Where this differs from IEEE 754
+## Differences from IEEE 754
 
-The required operations are all here, and the corpus checks them. What follows is what a
-reader of the standard should know before relying on this.
+All required IEEE 754 operations are implemented and tested. The differences are:
 
-**No alternate exception handling.** IEEE 754 clause 8 describes trap handlers that run
-instead of returning a default result. Only default exception handling is implemented:
-operations return the standard result and record what happened in `DecimalContext.Status`.
-There is nothing to install and nothing that throws from arithmetic.
+- **No alternate exception handling.** IEEE 754 clause 8 describes trap handlers. Only
+  default exception handling is implemented: each operation returns the default result
+  and sets flags in the context's `Status`. Arithmetic never throws.
+- **No trigonometric or hyperbolic functions.** IEEE 754-2019 lists these as recommended,
+  not required. decNumber does not implement them, and the corpus does not test them. As
+  a result, the types do not implement `IFloatingPointIeee754<T>`. The other members of
+  that interface are available as static methods with the same names: `Epsilon`, `NaN`,
+  the infinities, `NegativeZero`, `FusedMultiplyAdd`, `Ieee754Remainder`, `ILogB`,
+  `ScaleB`, `BitIncrement`, and `BitDecrement`.
+- **Two definitions of max and min.** IEEE 754-2019 `maximum` returns NaN if either
+  operand is NaN. The specification's `max` returns the other operand when one is a
+  quiet NaN. `Max` and `Min` use the IEEE 754-2019 definition. `MaxNumber`, `MinNumber`,
+  and the overloads that take a context use the specification's definition. The same
+  applies to `MaxMagnitude` and `MinMagnitude`.
+- **`ILogB` uses .NET conventions for special values.** It returns `int.MinValue` for zero
+  and `int.MaxValue` for NaN and infinity. The specification's `logb` returns -Infinity,
+  NaN, and +Infinity. `LogB` implements the specification's version and returns a
+  decimal.
+- **`ScaleB` scales by powers of ten**, as IEEE 754 defines it for decimal formats.
+  `double.ScaleB` scales by powers of two. A scale value outside the valid range is an
+  invalid operation and returns NaN. `double.ScaleB` returns infinity in that case.
+- **`Round(value, digits)` does not add trailing zeros.** If the value already has
+  `digits` or fewer decimal places, it is returned unchanged. Use `Quantize` to set an
+  exact number of places.
+- **Equality and ordering follow .NET conventions for NaN**, as described under
+  [Comparison](#comparison).
+- **Three recommended operations are missing:** `quantum(x)`, `getPayload`, `setPayload`,
+  and `setPayloadSignaling`. `sameQuantum` and `quantize` are implemented. NaN payloads
+  are preserved through arithmetic and conversion, and are parsed and formatted, for
+  example `NaN255`.
 
-**No trigonometric or hyperbolic functions**, and therefore no `IFloatingPointIeee754<T>`.
-IEEE 754-2019 clause 9 lists these as *recommended* rather than required, decNumber supplies
-none of them, and the corpus has no cases for them. Everything else that interface declares
-is provided as ordinary statics with the same names -- `Epsilon`, `NaN`, the infinities,
-`NegativeZero`, `FusedMultiplyAdd`, `Ieee754Remainder`, `ILogB`, `ScaleB`, `BitIncrement`,
-`BitDecrement` -- so adding the interface later is a pure addition.
+## Implementation
 
-**Two readings of max and min.** IEEE 754-2019's `maximum` gives a NaN when either operand is
-one; the specification's `max` hands back the number standing beside a quiet NaN. Both are
-here, and .NET's names decide which you get: `Max` and `Min` are the IEEE reading, `MaxNumber`
-and `MinNumber` are the specification's -- and so are the overloads taking a
-`DecimalContext`, because that is what the corpus is written against. The same split runs
-through `MaxMagnitude` and `MinMagnitude`.
+**`Decimal32`** stores its BID encoding in a `uint` and computes in 64-bit integers. With
+7 digits, every intermediate result fits in 64 bits: a product has at most 14 digits, an
+aligned sum at most 20, a scaled dividend 14, and a square-root radicand 16. Division
+uses one `double` division followed by an integer correction. Square root uses
+`Math.Sqrt` followed by an exact check. See `design/Decimal32.md`.
 
-**`ILogB` reports out-of-range results the .NET way**, giving `int.MinValue` for a zero and
-`int.MaxValue` for a NaN or an infinity, where the specification's `logb` gives -Infinity, a
-NaN, and +Infinity. `LogB` is the specification's and returns a decimal.
+**`Decimal64`** stores its BID encoding in a `ulong` and computes in 64-bit integers,
+without `UInt128` or `BigInteger`. Products are formed from 8-digit halves into two
+base-10^16 limbs. Division by a power of ten uses multiplication by a precomputed
+reciprocal. See `design/Decimal64.md`.
 
-**`ScaleB` shifts by powers of ten.** That is IEEE's definition -- scaleB uses the format's
-radix -- but it differs from `double.ScaleB`, which shifts by powers of two. A scale too
-large to be an operand is an invalid operation giving a NaN, where `double` overflows to an
-infinity.
+**`Decimal128`** stores its BID encoding in two 64-bit words and computes with two- and
+four-word integers. `UInt128` is used only by `ToBits` and `FromBits`, and `BigInteger`
+is not used. Division uses the Möller–Granlund 2-by-1 and 3-by-2 methods with a
+reciprocal computed from a table, without a hardware divide instruction. See
+`design/Decimal128.md`.
 
-**`Round(value, digits)` rounds and does not quantize.** Asking for more places than the
-value carries leaves it exactly as it is rather than padding the coefficient with zeros to
-reach the requested exponent. Padding is `Quantize`, and it is a separate operation because
-the quantum is part of what a decimal value records.
-
-**Equality and ordering split along .NET lines**, as described above: the operators are IEEE,
-while `Equals`/`GetHashCode`/`CompareTo` place NaN so that collections work.
-
-**Three recommended operations are absent**: `quantum(x)` -- though `sameQuantum` and
-`quantize` are both here -- and the NaN payload accessors `getPayload`, `setPayload`, and
-`setPayloadSignaling`. Payloads themselves are fully supported: they propagate through
-arithmetic, survive format conversion, and parse and format as `NaN255`.
+The elementary functions in all three types use a port of decNumber's
+arbitrary-precision engine. They need more digits than the format holds in order to
+round correctly. The engine's working storage is a fixed-size arena.
 
 ## Performance
 
-Measured against decNumber's `decDouble` and `decQuad` -- the fixed-format C routes, which
-are the fastest thing decNumber offers and so the right thing to compare against.
-Nanoseconds per operation, same machine, same values, BenchmarkDotNet's default job.
+Nanoseconds per operation compared with decNumber's fixed-size C types. The operands are
+decbench's set: 1 to 16 digits, exponents from -40 to +40. Measured on one machine with
+BenchmarkDotNet's short job.
 
-| operation | `Decimal64` | `decDouble` | ratio |
-| --- | --- | --- | --- |
-| add | 60.5 | 42.3 | 1.43x |
-| multiply | 47.9 | 35.1 | 1.36x |
-| divide | 120.3 | 119.7 | 1.01x |
-| fma | 96.5 | 88.5 | 1.09x |
-| compare | 12.1 | 12.5 | 0.97x |
-| to string | 63.6 | 10.3 | 6.17x |
-| from string | 54.3 | 28.1 | 1.93x |
+| operation | `decDouble` | `Decimal64` | `decQuad` | `Decimal128` |
+| --- | --- | --- | --- | --- |
+| add | 41.0 | 12.7 | 62.7 | 24.4 |
+| multiply | 36.0 | 11.2 | 50.1 | 15.3 |
+| divide | 121.1 | 31.0 | 192.2 | 68.7 |
+| fma | 88.8 | 23.8 | 114.6 | 34.1 |
+| compare | 12.8 | 7.4 | 25.3 | 12.9 |
+| format into a span | 10.5 | 19.8 | 17.5 | 25.4 |
+| from string | 27.5 | 18.1 | 31.9 | 33.0 |
 
-Broadly: managed code lands within about 1.1x to 1.4x of optimized C on arithmetic, and
-matches it on divide and compare -- the latter because classification and sign handling read
-the packed bits without ever unpacking the coefficient. `Decimal128` runs 1.1x to 1.8x
-against `decQuad`, and is faster than it on multiply.
+decbench measures only formatting and parsing for `decSingle`. On the same operands,
+`decSingle` formats in 7.7 ns and parses in 29.0 ns; `Decimal32` takes 17.1 ns and
+24.3 ns. On 1-to-7-digit operands, `Decimal32` adds in 12.2 ns, multiplies in 7.3 ns, and
+divides in 18.1 ns.
 
-The C figures are medians of several runs. `decbench` times one pass per operation with no
-warmup or statistics, and its longer rows vary by a good deal more between runs than the
-managed numbers beside them do, so read a ratio within about ten percent of another as a tie.
+Summary:
 
-Formatting is the outlier at roughly 6x, and the reason is known rather than mysterious:
-decNumber emits three digits at a time from its declet tables, and this still divides the
-coefficient down one digit at a time. Parsing is within 2x. Neither has been optimized;
-arithmetic was the priority.
+- Add, multiply, divide, and fma are 2.5 to 4 times faster than the C.
+- Compare is about 2 times faster.
+- Parsing is about the same speed or faster.
+- Formatting is 1.5 to 2.2 times slower. The C types store DPD and convert each 10-bit
+  group to three digits with a table lookup. These types store a binary coefficient and
+  must divide it to produce digits.
 
-For scale on the other side, `System.Decimal` adds in about 6ns against `Decimal64`'s 24ns
-on the same 8-digit operands, and `double` in under 1ns. Decimal floating point costs
-something; what it buys is exactness in base ten across the full IEEE range.
+The C figures are the median of several runs. decbench times one pass per operation
+without warmup, so its results vary more between runs than the BenchmarkDotNet results.
+Treat ratios within about 10% of each other as equal.
 
-The benchmark suite that produces these is in `Benchmarks/`; run it with
-`dotnet run --project Benchmarks -c Release -- --filter '*'`.
+To run the benchmarks:
+
+```
+dotnet run --project Benchmarks -c Release -- --filter '*'
+```
 
 ## Testing
 
 ```
 dotnet test                                   # unit tests and the corpus
-dotnet run --project DecTest -- <files>       # the corpus runner on its own
+dotnet run --project DecTest -- <files>       # the corpus runner only
 ```
 
-518 unit tests, plus every applicable case from Cowlishaw's `.decTest` corpus: **29,212**
-cases from the distributed files and **21,437** generated ones. The generated set exists
-because `decSingle` ships no arithmetic cases at all, so `Decimal32` coverage is produced by
-cross-checking against decNumber through a C++ harness.
+There are 665 tests. They include every applicable case from the `.decTest` corpus:
+10,562 cases for `Decimal32`, 19,850 for `Decimal64`, and 20,237 for `Decimal128`.
 
-Cases are matched on the full set of status flags, not just the result value. Most cohort
-and subnormal bugs show up as a missing `Rounded` or a spurious `Clamped` long before they
-change a digit.
+The corpus has two parts: the files distributed with decNumber, and a generated set. The
+distributed files have no arithmetic cases for decimal32 and no square-root cases for
+the fixed-size formats. The generated set covers these. It was produced by running
+decNumber on the operands of the general test files through a C++ harness.
+
+Each case checks both the result and the complete set of status flags.
 
 ## Repository layout
 
 ```
-Decimals/               the library
-Decimals.Conformance/   corpus reader and runner
-DecTest/                console front end for the runner
-Tests/                  unit tests and the corpus harness
-Benchmarks/             BenchmarkDotNet suite
-TestData/               vendored .decTest corpus
+Decimal32/              Decimal32 type
+Decimal64/              Decimal64 type
+Decimal128/             Decimal128 type
+Decimals.Conformance/   .decTest reader and runner
+DecTest/                command-line front end for the runner
+Tests/                  unit tests and corpus tests
+Benchmarks/             BenchmarkDotNet benchmarks
+TestData/               .decTest corpus
 ```
 
 ## Attribution
 
-The arithmetic specification, the encodings, and the testcases are Mike Cowlishaw's, offered
-on an as-is basis; see <https://speleotrove.com/decimal/>. The corpus files vendored under
-`TestData/` keep their original headers and that notice intact. This library is an
-independent implementation and shares no code with decNumber.
+The arithmetic specification, the encodings, and the test cases are by Mike Cowlishaw and
+are provided as-is; see <https://speleotrove.com/decimal/>. The corpus files in
+`TestData/` keep their original headers and notices. This implementation shares no code
+with decNumber.

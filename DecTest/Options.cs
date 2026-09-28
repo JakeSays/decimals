@@ -10,7 +10,10 @@ namespace Decimals.DecTest;
 /// </summary>
 public sealed class Options
 {
-    private static readonly string[] AllTargets = ["Decimal32", "Decimal64", "Decimal128"];
+    private static readonly string[] AllTargets =
+    [
+        "Decimal32", "Decimal64", "Decimal128"
+    ];
 
     public List<string> Inputs { get; } = [];
 

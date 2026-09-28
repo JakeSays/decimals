@@ -5,7 +5,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Decimals\Decimals.csproj" />
+    <ProjectReference Include="..\Decimal32\Decimal32.csproj" />
+    <ProjectReference Include="..\Decimal64\Decimal64.csproj" />
+    <ProjectReference Include="..\Decimal128\Decimal128.csproj" />
   </ItemGroup>
 
 </Project>
