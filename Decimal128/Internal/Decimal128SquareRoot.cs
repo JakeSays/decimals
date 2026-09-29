@@ -6,44 +6,48 @@ using System.Runtime.CompilerServices;
 namespace Decimals.Internal;
 
 /// <summary>
-/// The square root, correctly rounded, on machine words.
+/// The correctly rounded square root, computed with 64-bit words.
 /// </summary>
 /// <remarks>
 /// <para>
-/// The coefficient is scaled by an even power of ten until it has sixty-nine or seventy
-/// digits, whose integer root has thirty-five: thirty-four to keep and one to round on.
-/// Whether the root squares back to the radicand says whether anything lies below that
-/// digit. Halving the exponent is what makes the root's, which is why the scaling keeps it
-/// even.
+/// The coefficient is scaled by an even power of ten to 69 or 70 digits. Its integer root
+/// then has 35 digits: 34 to keep and one to round on. If the root squared equals the
+/// radicand, nothing lies below the round digit. The root's exponent is half the operand's
+/// exponent, which is why the scale must be even.
 /// </para>
 /// <para>
-/// The radicand is held in four words. Its root is estimated in floating point from the
-/// top two of them, which gives fifty-three of its hundred and sixteen bits, and pulled to
-/// between one below the root and two above it by two Newton steps, each computed from the
-/// exact difference between the radicand and the estimate's square; the last units are
-/// settled by comparing exact squares. Nothing wider than a 64-by-64 multiply is used.
+/// The radicand takes four words. Its root is first estimated in floating point from the
+/// top two words, which gives 53 of its 116 bits. Two Newton steps then bring the estimate
+/// to between 1 below the root and 2 above it. Each step uses the exact difference between
+/// the radicand and the estimate's square. Comparing exact squares settles the last units.
+/// Nothing is wider than a 64-by-64 multiply.
 /// </para>
 /// <para>
-/// Nothing in the root's computation branches on the data: the sign of a correction is
-/// applied through a mask, and the settling compares the four candidates around the
-/// estimate at once rather than walking to the root. Whether the estimate lies above or
-/// below the root is a coin flip, and a branch on it mispredicted as often as not.
+/// The computation does not branch on the data. The sign of each correction is applied
+/// with a mask, and the settling step checks all four candidates at once instead of
+/// stepping toward the root. Whether the estimate is above or below the root is random,
+/// and a branch on it mispredicted about half the time.
 /// </para>
 /// <para>
-/// An exact root is shortened toward the exponent the specification prefers, which is half
-/// the operand's, giving back the trailing zeros the scaling introduced.
+/// An exact root drops trailing zeros until its exponent reaches the preferred exponent,
+/// which is half the operand's. This removes the zeros that the scaling added.
 /// </para>
 /// </remarks>
 [SkipLocalsInit]
 internal static class Decimal128SquareRoot
 {
-    /// <summary>Digits the radicand is scaled to, or one fewer when that keeps the exponent even.</summary>
+    /// <summary>The number of digits the radicand is scaled to, or one fewer to keep the exponent even.</summary>
     private const int RadicandDigits = 70;
 
     private const double WordScale = 18446744073709551616.0;
 
     private const double TwoWordScale = WordScale * WordScale;
 
+    /// <summary>The square root, correctly rounded.</summary>
+    /// <param name="value">The encoded operand.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded root, or a quiet NaN if the operand is negative and not zero.</returns>
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static Decimal128Integer SquareRoot(Decimal128Integer value, Decimal128Rounding rounding,
         ref Decimal128Status status)
@@ -79,9 +83,9 @@ internal static class Decimal128SquareRoot
             return Decimal128Arithmetic.Invalid(ref status);
         }
 
-        // An odd exponent is made even by moving a digit into the coefficient. The
-        // multiply is done either way rather than branched on, since which it is follows
-        // the data.
+        // Make an odd exponent even by multiplying the coefficient by 10. The multiply is
+        // done in both cases, by 1 or 10, because a branch on the exponent's parity would
+        // depend on the data.
         var odd = exponent & 1;
         coefficient = coefficient.MultiplyBy(1UL + (9UL * (ulong)odd));
         exponent -= odd;
@@ -99,8 +103,8 @@ internal static class Decimal128SquareRoot
             return Decimal128Finalizer.Finalize(false, root, rootExponent, Decimal128Residue.Exact, rounding, ref status);
         }
 
-        // Thirty-five digits with something non-zero below them: the last digit is the
-        // round digit and the remainder is a sticky below it.
+        // 35 digits with a non-zero remainder below them. The last digit is the round digit,
+        // and the remainder acts as a sticky digit below it.
         var kept = Decimal128Tables.DivRemPowerOfTen(root, 1, out var roundDigit);
         var residue = Decimal128Rounder.Combine(roundDigit, 5, Decimal128Residue.BelowHalf);
 
@@ -108,14 +112,14 @@ internal static class Decimal128SquareRoot
     }
 
     /// <summary>
-    /// The largest integer whose square does not exceed the radicand, which has at least
-    /// sixty-nine digits and fewer than seventy-one, and so a root below 10^35.
+    /// The largest integer whose square does not exceed the radicand. The radicand has 69
+    /// or 70 digits, so the root is below 10^35.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The seed is off by up to 2^65 for a root that can need a hundred and seventeen
-    /// bits, so the first correction goes through two words; it leaves the estimate within
-    /// 2^16, so the second fits a word.
+    /// The seed can be off by up to 2^65, and the root can need 117 bits, so the first
+    /// correction uses two words. It leaves the estimate within 2^16 of the root, so the
+    /// second correction fits in one word.
     /// </para>
     /// <para>
     /// The second step leaves the estimate at least one below the integer root and at most
@@ -131,8 +135,8 @@ internal static class Decimal128SquareRoot
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static Decimal128Integer IntegerSquareRoot(Decimal128LongInteger radicand, out bool exact)
     {
-        // The radicand's top two words hold at least ninety-seven of its bits, which is
-        // more than a double keeps, so they are all the seed is taken from.
+        // The radicand's top two words hold at least 97 of its bits, more than a double
+        // keeps, so the seed is computed from those two words only.
         var top = (Decimal128Integer.WordToDouble(radicand.Word3) * WordScale)
             + Decimal128Integer.WordToDouble(radicand.Word2);
         var estimateDouble = Math.Sqrt(top) * WordScale;
@@ -151,15 +155,15 @@ internal static class Decimal128SquareRoot
     }
 
     /// <summary>
-    /// One Newton correction: the difference between the radicand and the estimate's
-    /// square over twice the estimate, floored, as a magnitude with its sign in a mask.
-    /// The difference is exact and signed, and below 2^183 in magnitude either way, so its
-    /// magnitude's second and third words carry it to a double.
+    /// One Newton correction: (radicand - estimate squared) / (2 * estimate), floored. It
+    /// returns the magnitude and puts the sign in a mask. The difference is exact and
+    /// signed, and its magnitude is below 2^183, so the magnitude's second and third words
+    /// are enough to convert it to a double.
     /// </summary>
     /// <remarks>
-    /// The magnitude is taken first because a two's complement value cannot go to a
-    /// double word by word: the rounding of an all-ones word swallows every word below
-    /// it, and the sum comes out with the wrong sign.
+    /// The magnitude is taken first because a two's complement value cannot be converted to
+    /// double one word at a time. Rounding an all-ones word loses every word below it, and
+    /// the sum gets the wrong sign.
     /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static double Correction(Decimal128LongInteger radicand, Decimal128Integer estimate,
@@ -176,7 +180,7 @@ internal static class Decimal128SquareRoot
         return Math.Floor(value / (2.0 * estimateDouble));
     }
 
-    /// <summary>The value as it is under a zero mask, and its two's complement under an all-ones one.</summary>
+    /// <summary>Returns the value unchanged for a zero mask, or its two's complement for an all-ones mask.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static Decimal128LongInteger Negate(Decimal128LongInteger value, ulong mask)
     {
@@ -198,11 +202,10 @@ internal static class Decimal128SquareRoot
     }
 
     /// <summary>
-    /// The root from an estimate between one below it and two above it: the largest of the
-    /// four candidates from two below the estimate to one above it whose square does not
-    /// exceed the radicand. The squares come from the lowest candidate's by adding the
-    /// successive odd numbers above twice it, and the candidates that fit are counted
-    /// rather than walked.
+    /// Finds the root from an estimate that is between 1 below it and 2 above it. The root
+    /// is the largest of the four candidates, from 2 below the estimate to 1 above it, whose
+    /// square does not exceed the radicand. Each square is the previous square plus the
+    /// next odd number. The code counts how many candidates fit instead of looping.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static Decimal128Integer Settle(Decimal128LongInteger radicand, Decimal128Integer estimate, out bool exact)

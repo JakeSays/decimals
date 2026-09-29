@@ -299,7 +299,7 @@ All required IEEE 754 operations are implemented and tested. The differences are
   exact number of places.
 - **Equality and ordering follow .NET conventions for NaN**, as described under
   [Comparison](#comparison).
-- **Three recommended operations are missing:** `quantum(x)`, `getPayload`, `setPayload`,
+- **Four recommended operations are missing:** `quantum(x)`, `getPayload`, `setPayload`,
   and `setPayloadSignaling`. `sameQuantum` and `quantize` are implemented. NaN payloads
   are preserved through arithmetic and conversion, and are parsed and formatted, for
   example `NaN255`.
@@ -370,19 +370,34 @@ dotnet run --project Benchmarks -c Release -- --filter '*'
 ## Testing
 
 ```
-dotnet test                                   # unit tests and the corpus
-dotnet run --project DecTest -- <files>       # the corpus runner only
+dotnet test                                   # unit tests, corpus, vector sample
+./publish-dectest.sh                          # builds dectest into ~/bin
+dectest TestData/DecTest TestData/Generated   # the corpus
+dectest --fetch-hfahmy TestData/Hfahmy/Full   # downloads the full vector set
+dectest --vectors TestData/Hfahmy/Full        # runs it
 ```
 
-There are 665 tests. They include every applicable case from the `.decTest` corpus:
-10,562 cases for `Decimal32`, 19,850 for `Decimal64`, and 20,237 for `Decimal128`.
+`dectest` is the command-line runner in `DecTest/`, published as a native release build.
+Run `dectest` with no arguments for its options. `dotnet run --project DecTest --` runs the
+same program without publishing it.
 
-The corpus has two parts: the files distributed with decNumber, and a generated set. The
-distributed files have no arithmetic cases for decimal32 and no square-root cases for
-the fixed-size formats. The generated set covers these. It was produced by running
-decNumber on the operands of the general test files through a C++ harness.
+There are 692 tests. They run two sets of external test data.
 
-Each case checks both the result and the complete set of status flags.
+**The `.decTest` corpus**, every applicable case: 10,562 for `Decimal32`, 19,850 for
+`Decimal64`, and 20,237 for `Decimal128`. The corpus has two parts: the files distributed
+with decNumber, and a generated set. The distributed files have no arithmetic cases for
+decimal32 and no square-root cases for the fixed-size formats. The generated set covers
+these. It was produced by running decNumber on the operands of the general test files. Each
+case checks the result and the complete set of status flags.
+
+**Amr Sayed-Ahmed and Hossam A. H. Fahmy's test vectors**, a committed sample of every
+hundredth vector: 21,682 for `Decimal64` and 89,495 for `Decimal128`. The vectors are
+generated to cover the cases where decimal implementations often fail, such as
+cancellation, sticky digits, and results just below a rounding boundary. Each vector checks the result,
+including its exponent, and the IEEE 754 flags. The full set of 11.1 million vectors is too
+large to commit; the commands above download and run it. There are no decimal32 vectors.
+
+`TestData/README.md` describes each data set's source, license, and known defects.
 
 ## Repository layout
 
@@ -390,16 +405,18 @@ Each case checks both the result and the complete set of status flags.
 Decimal32/              Decimal32 type
 Decimal64/              Decimal64 type
 Decimal128/             Decimal128 type
-Decimals.Conformance/   .decTest reader and runner
-DecTest/                command-line front end for the runner
-Tests/                  unit tests and corpus tests
+Decimals.Conformance/   .decTest and test-vector readers and runners
+DecTest/                command-line front end for the runners
+Tests/                  unit tests, corpus tests, and vector tests
 Benchmarks/             BenchmarkDotNet benchmarks
-TestData/               .decTest corpus
+TestData/               .decTest corpus and test vectors
 ```
 
 ## Attribution
 
-The arithmetic specification, the encodings, and the test cases are by Mike Cowlishaw and
-are provided as-is; see <https://speleotrove.com/decimal/>. The corpus files in
-`TestData/` keep their original headers and notices. This implementation shares no code
-with decNumber.
+The arithmetic specification, the encodings, and the `.decTest` test cases are by Mike
+Cowlishaw and are provided as-is; see <https://speleotrove.com/decimal/>. The test vectors
+are by Amr Sayed-Ahmed and Hossam A. H. Fahmy of Cairo University; see
+<http://eece.cu.edu.eg/~hfahmy/arith_debug/>. The files in `TestData/` keep their original
+headers and notices, and `TestData/README.md` gives each set's license and the works to
+cite. This implementation shares no code with decNumber.

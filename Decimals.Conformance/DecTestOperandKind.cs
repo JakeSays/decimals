@@ -4,25 +4,25 @@
 namespace Decimals.Conformance;
 
 /// <summary>
-/// How an operand or result token is to be read.
+/// The notation of an operand or result token.
 /// </summary>
 public enum DecTestOperandKind
 {
     /// <summary>A numeric string.</summary>
     Plain,
 
-    /// <summary>An octothorpe and 8, 16, or 32 hexadecimal digits: an explicit encoding.</summary>
+    /// <summary>A # followed by 8, 16, or 32 hex digits: an explicit encoding.</summary>
     Encoded,
 
-    /// <summary>"32#", "64#", or "128#" and a numeric string.</summary>
+    /// <summary>"32#", "64#", or "128#" followed by a numeric string.</summary>
     FormatPrefixed,
 
-    /// <summary>A lone octothorpe: a null reference, which no managed value can be.</summary>
+    /// <summary>A # by itself: a null reference. No managed value can be null here.</summary>
     Null,
 
-    /// <summary>A lone question mark: the X3.274 subset leaves the result undefined.</summary>
+    /// <summary>A ? by itself: the result is undefined in the X3.274 subset.</summary>
     Undefined,
 
-    /// <summary>An octothorpe form that matches none of the above.</summary>
+    /// <summary>A # form that matches none of the above.</summary>
     Invalid
 }

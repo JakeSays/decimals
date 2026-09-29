@@ -7,9 +7,12 @@ using System.Linq;
 namespace Decimals.Conformance;
 
 /// <summary>
-/// Running counts for one file or for a whole run, with the reasons tests were skipped and
-/// a few example ids for each so a reason can be traced back to the lines that caused it.
+/// Pass, fail, skip, and error counts for one file or a whole run.
 /// </summary>
+/// <remarks>
+/// For each skip reason, it keeps a count and a few example test ids, so a reason can be
+/// traced to the lines that caused it.
+/// </remarks>
 public sealed class DecTestTotals
 {
     private const int MaxExampleIds = 3;
@@ -25,7 +28,7 @@ public sealed class DecTestTotals
 
     public long Skipped { get; private set; }
 
-    /// <summary>Lines that could not be read as a directive or a test at all.</summary>
+    /// <summary>Lines that could not be parsed as a directive or a test.</summary>
     public long Errors { get; private set; }
 
     public IReadOnlyList<string> Failures => _failures;

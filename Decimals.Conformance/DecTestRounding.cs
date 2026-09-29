@@ -4,11 +4,11 @@
 namespace Decimals.Conformance;
 
 /// <summary>
-/// The eight rounding modes a <c>rounding</c> directive can name.
+/// The eight rounding modes a <c>rounding</c> directive can set.
 /// </summary>
 /// <remarks>
-/// Laid out in the order every decimal type in the repository uses for its own rounding
-/// enumeration, so a target converts between the two by a cast.
+/// Each decimal type's own rounding enum uses the same order, so a target converts between
+/// the two with a cast.
 /// </remarks>
 public enum DecTestRounding
 {
@@ -34,8 +34,8 @@ public enum DecTestRounding
     Up,
 
     /// <summary>
-    /// Away from zero when the digit left of the discarded part is 0 or 5, toward zero
-    /// otherwise; the corpus spells it <c>05up</c>.
+    /// Away from zero if the last kept digit is 0 or 5, otherwise toward zero. The corpus
+    /// calls it <c>05up</c>.
     /// </summary>
     ZeroFiveUp
 }

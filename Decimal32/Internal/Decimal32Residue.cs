@@ -4,33 +4,33 @@
 namespace Decimals.Internal;
 
 /// <summary>
-/// Everything discarded below the last digit a coefficient keeps, reduced to the one thing
-/// rounding needs to know about it: which side of halfway it lies on.
+/// Summarizes the digits discarded below the last kept digit. Rounding only needs to know
+/// whether the discarded part is zero, below half, exactly half, or above half.
 /// </summary>
 /// <remarks>
 /// <para>
-/// This is decNumber's residue. An exact intermediate of this format can run to fourteen
-/// digits for a product and far more for an operand aligned against another far below it,
-/// but once its top nineteen are in hand nothing below them can do more than tip a
-/// rounding, and four states describe that completely. The numeric values are decNumber's
-/// so that a comparison against <see cref="Half"/> reads the same way in both.
+/// This is decNumber's residue. In this format, an exact product has up to 14 digits, and
+/// an operand aligned against a much smaller one can have many more. Once the top 19
+/// digits are known, the digits below them can only affect rounding, and these four states
+/// describe that completely. The numeric values match decNumber's, so comparisons against
+/// <see cref="Half"/> work the same way in both.
 /// </para>
 /// <para>
-/// A residue is only safe to carry when every later discard happens above it. Folding two
-/// inexact quantities into one residue and then adding them is wrong, because their sum
-/// can carry into the digits above; every path here folds at most one operand.
+/// A residue is safe to carry only if every later discard happens above it. Folding two
+/// inexact values into residues and then adding them is wrong, because their sum can carry
+/// into the kept digits. Every code path here folds at most one operand.
 /// </para>
 /// </remarks>
 internal enum Decimal32Residue : byte
 {
     Exact = 0,
 
-    /// <summary>Non-zero, and less than half a unit in the last place kept.</summary>
+    /// <summary>Non-zero, and less than half a unit in the last kept place.</summary>
     BelowHalf = 1,
 
-    /// <summary>Exactly half a unit in the last place kept.</summary>
+    /// <summary>Exactly half a unit in the last kept place.</summary>
     Half = 5,
 
-    /// <summary>More than half a unit in the last place kept.</summary>
+    /// <summary>More than half a unit in the last kept place.</summary>
     AboveHalf = 7
 }

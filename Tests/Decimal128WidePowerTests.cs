@@ -8,8 +8,8 @@ using Xunit;
 namespace Decimals.Tests;
 
 /// <summary>
-/// The constants behind division by a power of ten past one word, and the reciprocal
-/// seeds, re-derived, and the four-word division by those powers against BigInteger.
+/// Recomputes the constants for dividing by powers of ten above 10^19 and the reciprocal
+/// seeds, and checks four-word division by those powers against BigInteger.
 /// </summary>
 public sealed class Decimal128WidePowerTests
 {
@@ -58,7 +58,7 @@ public sealed class Decimal128WidePowerTests
             for (var attempt = 0; attempt < 3000; attempt++)
             {
                 var value = NextFourWords(random) >> random.Next(0, 130);
-                var fits = Decimal128Tables.TryDivRemWidePowerOfTen(FromBigLong(value), power, out var quotient,
+                var fits = Decimal128Tables.DivRemWidePowerOfTenIfFits(FromBigLong(value), power, out var quotient,
                     out var remainder);
 
                 Assert.Equal(value < limit, fits);
@@ -70,11 +70,11 @@ public sealed class Decimal128WidePowerTests
             }
 
             var edge = limit - 1;
-            Assert.True(Decimal128Tables.TryDivRemWidePowerOfTen(FromBigLong(edge), power, out var edgeQuotient,
+            Assert.True(Decimal128Tables.DivRemWidePowerOfTenIfFits(FromBigLong(edge), power, out var edgeQuotient,
                 out var edgeRemainder));
             Assert.Equal(edge / divisor, ToBig(edgeQuotient));
             Assert.Equal(edge % divisor, ToBig(edgeRemainder));
-            Assert.False(Decimal128Tables.TryDivRemWidePowerOfTen(FromBigLong(limit), power, out _, out _));
+            Assert.False(Decimal128Tables.DivRemWidePowerOfTenIfFits(FromBigLong(limit), power, out _, out _));
         }
     }
 

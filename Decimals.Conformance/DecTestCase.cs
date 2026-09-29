@@ -7,6 +7,7 @@ namespace Decimals.Conformance;
 
 /// <summary>
 /// A test line: <c>id operation operand1 operand2 operand3 -&gt; result conditions</c>.
+/// There are one to three operands.
 /// </summary>
 public sealed class DecTestCase
 {

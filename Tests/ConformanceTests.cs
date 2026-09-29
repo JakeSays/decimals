@@ -10,24 +10,24 @@ using Decimals.Conformance;
 namespace Decimals.Tests;
 
 /// <summary>
-/// Runs the testcase corpus, one xunit case per group file. The console runner in the
-/// DecTest project does the same work with a report; this is here so a plain
-/// <c>dotnet test</c> covers conformance too.
+/// Runs the .decTest corpus, with one xunit case per file. The dectest console runner does
+/// the same work and prints a report. This class lets <c>dotnet test</c> cover the corpus
+/// too.
 /// </summary>
 /// <remarks>
-/// Two sets of groups. <c>TestData/DecTest</c> holds Cowlishaw's own, as distributed.
-/// <c>TestData/Generated</c> holds groups written by <c>decgen</c> from the general groups:
-/// those were written for an arbitrary-precision context and cannot be run against a fixed
-/// format directly, so their operands are re-evaluated under one. That is where the square
-/// root and the Decimal32 arithmetic coverage comes from, neither of which the distributed
-/// groups have a file for.
+/// There are two sets of files. <c>TestData/DecTest</c> holds Cowlishaw's files as
+/// distributed. <c>TestData/Generated</c> holds files written by <c>decgen</c> from the
+/// general files. The general files are written for an arbitrary-precision context, so
+/// they cannot run against a fixed format directly; <c>decgen</c> recomputes their results
+/// for a fixed format. The generated files provide the square-root tests and the Decimal32
+/// arithmetic tests, which the distributed files lack.
 /// </remarks>
 public class ConformanceTests
 {
     private static readonly string CorpusRoot = Path.Combine(AppContext.BaseDirectory, "TestData");
 
-    // The three group files hold nothing but "dectest" directives naming the others, so
-    // running them as well would only repeat work.
+    // These three files contain only "dectest" directives that name the other files.
+    // Running them would repeat the other files.
     private static readonly string[] GroupFiles = ["decSingle", "decDouble", "decQuad"];
 
     public static TheoryData<string, string> CorpusFiles()

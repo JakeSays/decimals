@@ -6,10 +6,9 @@ using System.Globalization;
 namespace Decimals.Tests;
 
 /// <summary>
-/// Random decimal64 operands as text, for tests that run over many values rather than a
-/// few chosen ones. The distribution leans on the places arithmetic goes wrong: full-width
-/// coefficients, runs of nines and zeros, exponents at both ends of the range, and the
-/// special values.
+/// Random decimal64 operands as text, for tests that need many values. The values favor
+/// the cases where arithmetic tends to fail: full-width coefficients, runs of nines and
+/// zeros, exponents at both ends of the range, and special values.
 /// </summary>
 public sealed class Decimal64TestValues
 {
@@ -150,7 +149,7 @@ public sealed class Decimal64TestValues
 
         if (choice == 3 && length > 3)
         {
-            // Trailing zeros, which the cohort rules are about.
+            // Trailing zeros, to test the rules for result exponents.
             var zeros = _random.Next(1, length - 1);
             for (var index = length - zeros; index < length; index++)
             {

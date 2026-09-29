@@ -4,36 +4,41 @@
 namespace Decimals.Internal;
 
 /// <summary>
-/// The square root, correctly rounded, on machine words.
+/// The correctly rounded square root, computed with 64-bit words.
 /// </summary>
 /// <remarks>
 /// <para>
-/// The coefficient is scaled by an even power of ten until it has thirty-three or
-/// thirty-four digits, whose integer root has seventeen: sixteen to keep and one to round
-/// on. Whether the root squares back to the radicand says whether anything lies below that
-/// digit. Halving the exponent is what makes the root's, which is why the scaling keeps it
-/// even.
+/// The coefficient is scaled by an even power of ten to 33 or 34 digits. Its integer root
+/// then has 17 digits: 16 to keep and one to round on. If the root squared equals the
+/// radicand, nothing lies below the round digit. The root's exponent is half the operand's
+/// exponent, which is why the scale must be even.
 /// </para>
 /// <para>
-/// The radicand is held in two words. Its root is estimated in floating point from the
-/// eighteen-digit coefficient and the exact power of ten that scaled it, pulled to within
-/// one by a correction from the exact remainder, and then settled by comparing exact
-/// squares -- nothing wider than a 64-by-64 multiply, and nothing that leaves the signed
-/// range of a word, so every conversion to and from double is the single instruction.
+/// The radicand takes two words. Its root is estimated in floating point from the 18-digit
+/// coefficient and the exact power of ten that scaled it. One correction from the exact
+/// remainder brings the estimate close, and comparing exact squares settles the last
+/// units. Nothing is wider than a 64-by-64 multiply, and no value leaves the signed range
+/// of a word, so every conversion to and from double is a single instruction.
 /// </para>
 /// <para>
-/// An exact root is shortened toward the exponent the specification prefers, which is half
-/// the operand's, giving back the trailing zeros the scaling introduced.
+/// An exact root drops trailing zeros until its exponent reaches the preferred exponent,
+/// which is half the operand's. This removes the zeros that the scaling added.
 /// </para>
 /// </remarks>
 internal static class Decimal64SquareRoot
 {
     /// <summary>
-    /// Digits the coefficient is widened to before the last power of ten is applied: the
-    /// most that leaves it inside a signed word, so that it converts to a double directly.
+    /// The number of digits the coefficient is widened to before the last power of ten is
+    /// applied. It is the most that fits in a signed 64-bit integer, so the coefficient
+    /// converts to double directly.
     /// </summary>
     private const int WidenedDigits = 18;
 
+    /// <summary>The square root, correctly rounded.</summary>
+    /// <param name="value">The encoded operand.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded root, or a quiet NaN if the operand is negative and not zero.</returns>
     public static ulong SquareRoot(ulong value, Decimal64Rounding rounding, ref Decimal64Status status)
     {
         if (Decimal64Encoding.IsSpecial(value))
@@ -78,9 +83,9 @@ internal static class Decimal64SquareRoot
             scale--;
         }
 
-        // The radicand as two words: the coefficient is first widened to eighteen digits,
-        // which fits, and the rest of the scaling -- fifteen or sixteen more -- is one full
-        // multiply. Both factors are exact as doubles, which is what the estimate needs.
+        // Build the two-word radicand. First widen the coefficient to 18 digits, which fits
+        // in a word. The remaining 15 or 16 digits of scaling are one full multiply. Both
+        // factors are exact as doubles, which the estimate needs.
         var widen = WidenedDigits - digits;
         var wide = coefficient * Decimal64Tables.PowerOfTen(widen);
         var power = Decimal64Tables.PowerOfTen(scale - widen);
@@ -95,8 +100,8 @@ internal static class Decimal64SquareRoot
             return Decimal64Finalizer.Finalize(false, root, rootExponent, Decimal64Residue.Exact, rounding, ref status);
         }
 
-        // Seventeen digits with something non-zero below them: the last digit is the round
-        // digit and the remainder is a sticky below it.
+        // 17 digits with a non-zero remainder below them. The last digit is the round digit,
+        // and the remainder acts as a sticky digit below it.
         var kept = root / 10;
         var roundDigit = root - (kept * 10);
         var residue = Decimal64Rounder.Combine(roundDigit, 5, Decimal64Residue.BelowHalf);
@@ -106,16 +111,16 @@ internal static class Decimal64SquareRoot
 
     /// <summary>
     /// The largest integer whose square does not exceed the two-word value
-    /// <c>wide * power</c>, which is below 10^34 and so has a root below 10^17.
+    /// <c>wide * power</c>. That value is below 10^34, so the root is below 10^17.
     /// </summary>
     private static ulong IntegerSquareRoot(ulong wide, ulong power, ulong high, ulong low, out bool exact)
     {
         var estimate = (ulong)(long)Math.Sqrt((double)(long)wide * (double)(long)power);
 
-        // The double carried fifty-three bits of a root that can need fifty-seven, so the
-        // estimate can be off by a couple of dozen. The difference between the radicand and
-        // the estimate's square is then well inside a signed word, so its low word is the
-        // whole of it, and one correction from it brings the estimate within one.
+        // A double has 53 bits and the root can need 57, so the estimate can be off by a
+        // few dozen. The difference between the radicand and the estimate's square then
+        // fits in a signed word, so its low word holds all of it. One correction from it
+        // brings the estimate close, and the loops below settle the rest.
         var squareHigh = Math.BigMul(estimate, estimate, out var squareLow);
         var difference = (double)(long)(low - squareLow);
         estimate = (ulong)((long)estimate + (long)(difference / (2.0 * (double)(long)estimate)));
@@ -145,7 +150,7 @@ internal static class Decimal64SquareRoot
         return estimate;
     }
 
-    /// <summary>Whether a two-word square exceeds the two-word radicand.</summary>
+    /// <summary>True if a two-word square is greater than the two-word radicand.</summary>
     private static bool IsAbove(ulong squareHigh, ulong squareLow, ulong high, ulong low)
     {
         if (squareHigh != high)

@@ -8,13 +8,13 @@ using System.Linq;
 namespace Decimals.Conformance;
 
 /// <summary>
-/// Reads testcase files and runs what they describe against one decimal format.
+/// Reads .decTest files and runs their test cases against one decimal format.
 /// </summary>
 /// <remarks>
-/// A port of the C++ harness under <c>decNumber/harness</c>, with one difference: that one
-/// drives an arbitrary-precision engine and takes precision and exponent range from the
-/// directives, while this one drives a fixed format and skips whatever the directives do
-/// not match.
+/// This is a port of the C++ harness in <c>decNumber/harness</c>, with one difference. The
+/// C++ harness drives an arbitrary-precision engine and takes the precision and exponent
+/// range from the directives. This runner drives a fixed format and skips test cases whose
+/// directives do not match it.
 /// </remarks>
 public static class DecTestRunner
 {
@@ -22,8 +22,8 @@ public static class DecTestRunner
     private const int MaxIncludeDepth = 8;
 
     /// <summary>
-    /// Runs a file, or every <c>.decTest</c> file directly inside a directory. A group
-    /// reached more than once in a run is run once.
+    /// Runs a file, or every <c>.decTest</c> file directly inside a directory. A file that
+    /// is reached more than once is run only once.
     /// </summary>
     public static DecTestTotals Run<TTarget, TDecimal>(string path, DecTestReport? report = null)
         where TTarget : IDecTestTarget<TTarget, TDecimal>
@@ -122,8 +122,8 @@ public static class DecTestRunner
 
         totals.Add(fileTotals);
 
-        // A "dectest" directive is not an include: the named file is processed exactly as
-        // if it were the only group being run, so it is deferred until this one is done.
+        // A "dectest" directive is not an include. The named file runs as if it were run on
+        // its own, so it runs after this file is finished.
         foreach (var include in includes)
         {
             RunFile<TTarget, TDecimal>(include, depth + 1, totals, completed, report);
@@ -146,8 +146,8 @@ public static class DecTestRunner
             return;
         }
 
-        // The format's precision and exponent range are fixed, so a directive block that
-        // describes a different shape of number is not about this type.
+        // The format's precision and exponent range are fixed. Directives that describe a
+        // different precision or range are for another format.
         if (directives.Precision != TTarget.Precision
             || directives.MaxExponent != TTarget.MaxExponent
             || directives.MinExponent != TTarget.MinExponent)
@@ -212,10 +212,10 @@ public static class DecTestRunner
                         break;
                     }
 
-                    // The copy family is defined on the bits and has to hand a non-canonical
-                    // operand back as it came. A type holding the binary-integer form cannot:
-                    // it canonicalized on the way in, so those cases are about the encoding
-                    // rather than the operation and are skipped for it.
+                    // The copy operations work on the bits and must return a non-canonical
+                    // operand unchanged. A type that stores BID makes the operand canonical
+                    // when it reads it, so it cannot pass these cases. They test the
+                    // encoding, not the operation, and are skipped for such a type.
                     if (!TTarget.PreservesNonCanonicalEncodings && IsCopyFamily(operation)
                         && !IsCanonical<TTarget, TDecimal>(operand.Text))
                     {
@@ -227,11 +227,11 @@ public static class DecTestRunner
 
                     if (DecTestOperations.ReportsConversionConditions(operation))
                     {
-                        // An encoding decodes exactly, but toSci, toEng, and apply report
-                        // what putting the value under the format's rules raises -- a
-                        // subnormal operand has to signal that it is one. Reconverting the
-                        // string form is the way there that leaves a signaling NaN signaling
-                        // and a negative zero negative.
+                        // Decoding an encoding raises no conditions. But toSci, toEng, and
+                        // apply must report the conditions of converting the value to the
+                        // format; for example, a subnormal operand raises Subnormal.
+                        // Converting the value's string form again raises them, and keeps
+                        // a signaling NaN signaling and a negative zero negative.
                         operands[index] = TTarget.FromString(
                             TTarget.ToScientificString(operands[index]), ref context);
                     }
@@ -243,16 +243,16 @@ public static class DecTestRunner
             }
         }
 
-        // A folded operand moves where the testcase's Clamped comes from, and there is no
-        // way for a fixed format to put it back. decNumber converts operands in a context
-        // wide enough to hold "1E+384" as written, so the addition is what folds it and
-        // raises Clamped. Reaching decimal64 the same value is already 1000000000000000E+369,
-        // the addition folds nothing, and Clamped is correctly not raised -- the testcase
-        // and the type disagree about which step owns the condition, not about the result.
+        // If converting an operand folded its exponent, the test case's Clamped condition
+        // comes from a different step here. decNumber converts operands in a context wide
+        // enough to hold "1E+384" as written, so the addition folds the exponent and raises
+        // Clamped. In decimal64 the operand is already 1000000000000000E+369 after
+        // conversion, so the addition folds nothing and correctly raises no Clamped. The
+        // result is the same; only the step that raises Clamped differs.
         var foldedOnConversion = context.HasRaised(DecTestStatus.Clamped);
 
-        // Conditions raised converting operands are the operation's own only for toSci,
-        // toEng, and apply, which are conversions.
+        // Only toSci, toEng, and apply report the conditions raised while converting
+        // operands, because those operations are conversions.
         if (!DecTestOperations.ReportsConversionConditions(operation))
         {
             context.ClearStatus();
@@ -330,8 +330,8 @@ public static class DecTestRunner
     }
 
     /// <summary>
-    /// Building the expected encoding from a numeric string raises no conditions, so it
-    /// runs through a context of its own.
+    /// Builds the expected encoding from a numeric string. It uses a separate context so
+    /// its conditions do not mix with the test's.
     /// </summary>
     private static TDecimal ExpectedEncoding<TTarget, TDecimal>(DecTestOperand result)
         where TTarget : IDecTestTarget<TTarget, TDecimal>
@@ -347,8 +347,8 @@ public static class DecTestRunner
     }
 
     /// <summary>
-    /// True when re-encoding what an encoding decodes to gives the same bits back. The
-    /// corpus carries patterns for which it does not.
+    /// True if decoding and re-encoding gives the same bits. The corpus includes encodings
+    /// for which it does not.
     /// </summary>
     private static bool IsCanonical<TTarget, TDecimal>(string hex)
         where TTarget : IDecTestTarget<TTarget, TDecimal>

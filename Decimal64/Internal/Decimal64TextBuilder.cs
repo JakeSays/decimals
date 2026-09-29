@@ -4,9 +4,9 @@
 namespace Decimals.Internal;
 
 /// <summary>
-/// A string builder over a caller's span, for the one formatting path that assembles text
-/// from a culture's separators and group sizes rather than writing digits in place. Grows
-/// onto the heap only if the culture's symbols outrun the span.
+/// A string builder that writes into a caller's span. It is used by the one formatting
+/// path that builds text from a culture's separators and group sizes. It moves to a heap
+/// array only if the text does not fit in the span.
 /// </summary>
 internal ref struct Decimal64TextBuilder
 {
@@ -14,12 +14,16 @@ internal ref struct Decimal64TextBuilder
 
     private int _length;
 
+    /// <summary>Creates a builder that writes into the given span first.</summary>
+    /// <param name="buffer">The initial buffer, usually on the stack.</param>
     public Decimal64TextBuilder(Span<char> buffer)
     {
         _buffer = buffer;
         _length = 0;
     }
 
+    /// <summary>Appends one character.</summary>
+    /// <param name="character">The character to append.</param>
     public void Append(char character)
     {
         if (_length == _buffer.Length)
@@ -30,6 +34,9 @@ internal ref struct Decimal64TextBuilder
         _buffer[_length++] = character;
     }
 
+    /// <summary>Appends a character several times.</summary>
+    /// <param name="character">The character to append.</param>
+    /// <param name="count">The number of times to append it. Zero or less appends nothing.</param>
     public void Append(char character, int count)
     {
         for (var index = 0; index < count; index++)
@@ -38,6 +45,8 @@ internal ref struct Decimal64TextBuilder
         }
     }
 
+    /// <summary>Appends a run of characters.</summary>
+    /// <param name="text">The characters to append.</param>
     public void Append(ReadOnlySpan<char> text)
     {
         if (_length + text.Length > _buffer.Length)
@@ -49,6 +58,8 @@ internal ref struct Decimal64TextBuilder
         _length += text.Length;
     }
 
+    /// <summary>Creates a string from the characters appended so far.</summary>
+    /// <returns>The built text.</returns>
     public override string ToString()
     {
         return new string(_buffer[.._length]);

@@ -6,15 +6,18 @@ using System.Runtime.CompilerServices;
 namespace Decimals.Internal;
 
 /// <summary>
-/// Discarding digits into a residue, and deciding what a residue does to the last digit
-/// kept under each of the eight rounding modes.
+/// Discards digits into a residue, and decides for each of the eight rounding modes
+/// whether a residue increments the last kept digit.
 /// </summary>
 internal static class Decimal32Rounder
 {
     /// <summary>
-    /// The residue of a discarded part that stands alone, measured against half of the
-    /// power it was discarded by.
+    /// The residue of a discarded part with nothing below it. <paramref name="half"/> is
+    /// half of the power of ten that was divided out.
     /// </summary>
+    /// <param name="discarded">The discarded digits, as an integer.</param>
+    /// <param name="half">Half of the power of ten the discarded digits were divided out by.</param>
+    /// <returns>Where the discarded part lies relative to half a unit of the kept digits.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Decimal32Residue Of(ulong discarded, ulong half)
     {
@@ -32,10 +35,14 @@ internal static class Decimal32Rounder
     }
 
     /// <summary>
-    /// The residue of a discarded part with an older residue already lying below it. The
-    /// older one is too far down to reach halfway on its own, so it can only break a tie and
-    /// make a zero part non-zero.
+    /// The residue of a discarded part that has an earlier residue below it. The earlier
+    /// residue is too small to reach half by itself. It can only turn an exact half into
+    /// above half, or a zero part into below half.
     /// </summary>
+    /// <param name="discarded">The discarded digits, as an integer.</param>
+    /// <param name="half">Half of the power of ten the discarded digits were divided out by.</param>
+    /// <param name="below">The residue of digits discarded earlier, below these.</param>
+    /// <returns>Where the whole discarded part lies relative to half a unit of the kept digits.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Decimal32Residue Combine(ulong discarded, ulong half, Decimal32Residue below)
     {
@@ -58,10 +65,12 @@ internal static class Decimal32Rounder
     }
 
     /// <summary>
-    /// The residue of one less the fraction a residue stands for, which is what subtracting
-    /// an inexact operand leaves: a part below half comes out above it, and a half stays a
-    /// half. Only the category matters, so no arithmetic is needed to flip it.
+    /// The residue of 1 minus the fraction a residue represents. Subtracting an inexact
+    /// operand leaves this: below half becomes above half, and half stays half. Only the
+    /// category matters, so no arithmetic is needed.
     /// </summary>
+    /// <param name="residue">The residue of the fraction.</param>
+    /// <returns>The residue of 1 minus the fraction.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Decimal32Residue Flip(Decimal32Residue residue)
     {
@@ -74,10 +83,15 @@ internal static class Decimal32Rounder
     }
 
     /// <summary>
-    /// Drops the last <paramref name="count"/> digits of a coefficient, folding them and any
-    /// residue already below them into a new residue. A count past the width of a machine
-    /// word discards everything, and everything is then below half.
+    /// Drops the last <paramref name="count"/> digits of a coefficient and folds them, with
+    /// any residue already below them, into a new residue. If the count is more digits than
+    /// a 64-bit word holds, everything is discarded and the residue is below half.
     /// </summary>
+    /// <param name="coefficient">The coefficient to shorten.</param>
+    /// <param name="count">The number of digits to drop. It must be at least 1.</param>
+    /// <param name="below">The residue of digits discarded earlier, below the dropped digits.</param>
+    /// <param name="residue">Receives the residue of everything discarded.</param>
+    /// <returns>The kept digits.</returns>
     public static ulong DropDigits(ulong coefficient, int count, Decimal32Residue below, out Decimal32Residue residue)
     {
         if (count > Decimal32Tables.MaxPower)
@@ -95,9 +109,14 @@ internal static class Decimal32Rounder
     }
 
     /// <summary>
-    /// Whether the last digit kept moves up under the rounding mode. The caller has already
-    /// established that the residue is not exact.
+    /// True if the rounding mode increments the last kept digit. The caller has already
+    /// checked that the residue is not exact.
     /// </summary>
+    /// <param name="coefficient">The kept digits.</param>
+    /// <param name="residue">The residue of the discarded digits. It must not be exact.</param>
+    /// <param name="negative">Whether the value is negative.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <returns>True if the coefficient must be incremented.</returns>
     public static bool ShouldIncrement(ulong coefficient, Decimal32Residue residue, bool negative, Decimal32Rounding rounding)
     {
         switch (rounding)
@@ -122,8 +141,8 @@ internal static class Decimal32Rounder
             case Decimal32Rounding.Floor:
                 return negative;
             default:
-                // ZeroFiveUp keeps the discarded part recoverable by a later rounding: it
-                // only moves the last digit when that digit is a 0 or a 5.
+                // ZeroFiveUp increments only when the last kept digit is 0 or 5. This keeps
+                // the result correct if it is rounded again later.
                 var tens = coefficient / 10;
                 var last = coefficient - (tens * 10);
                 return last == 0 || last == 5;

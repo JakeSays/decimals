@@ -4,8 +4,8 @@
 namespace Decimals;
 
 /// <summary>
-/// The ten classes of the specification's <c>class</c> operation, which is IEEE 754's
-/// <c>class</c> with signaling and quiet NaN kept apart.
+/// The ten classes returned by the specification's <c>class</c> operation. They are IEEE
+/// 754's classes, with signaling and quiet NaN kept separate.
 /// </summary>
 public enum Decimal128Class
 {

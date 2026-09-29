@@ -6,49 +6,52 @@ using System.Runtime.CompilerServices;
 namespace Decimals.Internal;
 
 /// <summary>
-/// An unsigned integer in two machine words: the bits of a <see cref="Decimal128"/>, a
-/// coefficient, or an intermediate of up to thirty-eight digits on its way to becoming
-/// one.
+/// An unsigned integer in two 64-bit words. It holds the bits of a
+/// <see cref="Decimal128"/>, a coefficient, or an intermediate value of up to 38 digits.
 /// </summary>
 /// <remarks>
 /// <para>
-/// This is what the arithmetic computes on instead of a 128-bit integer type: two words
-/// the JIT keeps in two registers, with only the operations the arithmetic needs -- add,
-/// subtract, compare, and multiply by a word or by another two words when the product is
-/// known to fit. Division by a power of ten is in <see cref="Decimal128Tables"/>, since
-/// it is a table lookup and two reciprocal steps rather than a division.
+/// The arithmetic uses this type instead of a 128-bit integer type. The JIT keeps the two
+/// words in two registers. The type has only the operations the arithmetic needs: add,
+/// subtract, compare, and multiply by a word or by another two-word value when the product
+/// is known to fit. Division by a power of ten is in <see cref="Decimal128Tables"/>,
+/// because it uses a table lookup and two reciprocal steps instead of a division.
 /// </para>
 /// <para>
-/// Addition and subtraction wrap, as the words they are built from do. Every caller keeps
-/// its operands inside thirty-eight digits, where a sum of two of them still fits, and
-/// subtracts only the smaller from the larger.
+/// Addition and subtraction wrap, like the words they are built from. Every caller keeps
+/// its operands within 38 digits, where the sum of two still fits, and only subtracts the
+/// smaller value from the larger.
 /// </para>
 /// <para>
-/// The comparisons are written without short-circuit operators so that they compile to
-/// flag-setting instructions rather than branches: which way a coefficient compare goes
-/// is decided by the data, and a branch on it mispredicts as often as not. The
-/// conversions to and from double avoid the unsigned conversions for the same reason:
-/// each of those is a branch on the top bit of a word, which a random word makes a coin
-/// flip.
+/// The comparisons do not use short-circuit operators, so they compile to flag-setting
+/// instructions instead of branches. The result of a coefficient comparison depends on the
+/// data, and a branch on it mispredicts about half the time. For the same reason, the
+/// conversions to and from double avoid the unsigned conversions. Each unsigned conversion
+/// branches on the top bit of a word, which is random for random values.
 /// </para>
 /// <para>
-/// Every member is marked to inline. Each is a few instructions, and left to the JIT's
-/// judgment they were emitted as calls once the operation around them had used up its
-/// inlining budget, which turned a two-register add into a call with four moves.
+/// Every member is marked for aggressive inlining. Each is only a few instructions. Without
+/// the attribute, the JIT emitted them as calls once the surrounding operation had used up
+/// its inlining budget, which turned a two-register add into a call with four moves.
 /// </para>
 /// </remarks>
 internal readonly struct Decimal128Integer : IEquatable<Decimal128Integer>
 {
-    /// <summary>Two to the sixty-fourth, which is what the high word counts in.</summary>
+    /// <summary>2^64, the weight of the high word.</summary>
     private const double WordScale = 18446744073709551616.0;
 
-    /// <summary>Two to the thirty-second, which is what the top half of a word counts in.</summary>
+    /// <summary>2^32, the weight of the top half of a word.</summary>
     private const double HalfWordScale = 4294967296.0;
 
+    /// <summary>The upper 64 bits.</summary>
     public readonly ulong High;
 
+    /// <summary>The lower 64 bits.</summary>
     public readonly ulong Low;
 
+    /// <summary>Creates a value from its two words.</summary>
+    /// <param name="high">The upper 64 bits.</param>
+    /// <param name="low">The lower 64 bits.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Decimal128Integer(ulong high, ulong low)
     {
@@ -56,37 +59,47 @@ internal readonly struct Decimal128Integer : IEquatable<Decimal128Integer>
         Low = low;
     }
 
+    /// <summary>The value 0.</summary>
     public static Decimal128Integer Zero
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => default;
     }
 
+    /// <summary>The value 1.</summary>
     public static Decimal128Integer One
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => new(0, 1);
     }
 
+    /// <summary>Whether the value is 0.</summary>
     public bool IsZero
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => (High | Low) == 0;
     }
 
-    /// <summary>Whether the value fits one word, in which case <see cref="Low"/> is the whole of it.</summary>
+    /// <summary>Whether the value fits in one word. If it does, <see cref="Low"/> holds all of it.</summary>
     public bool IsWord
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => High == 0;
     }
 
+    /// <summary>Widens a word to two words.</summary>
+    /// <param name="value">The value.</param>
+    /// <returns>The value, with a zero high word.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Decimal128Integer FromUInt64(ulong value)
     {
         return new Decimal128Integer(0, value);
     }
 
+    /// <summary>The sum of two values. It wraps if the sum does not fit in 128 bits.</summary>
+    /// <param name="left">The first value.</param>
+    /// <param name="right">The second value.</param>
+    /// <returns>The low 128 bits of the sum.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Decimal128Integer operator +(Decimal128Integer left, Decimal128Integer right)
     {
@@ -95,6 +108,10 @@ internal readonly struct Decimal128Integer : IEquatable<Decimal128Integer>
         return new Decimal128Integer(left.High + right.High + carry, low);
     }
 
+    /// <summary>The sum of a value and a word. It wraps if the sum does not fit in 128 bits.</summary>
+    /// <param name="left">The two-word value.</param>
+    /// <param name="right">The word to add.</param>
+    /// <returns>The low 128 bits of the sum.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Decimal128Integer operator +(Decimal128Integer left, ulong right)
     {
@@ -103,6 +120,10 @@ internal readonly struct Decimal128Integer : IEquatable<Decimal128Integer>
         return new Decimal128Integer(left.High + carry, low);
     }
 
+    /// <summary>The difference of two values. It wraps if the right operand is larger.</summary>
+    /// <param name="left">The value to subtract from.</param>
+    /// <param name="right">The value to subtract.</param>
+    /// <returns>The difference, modulo 2^128.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Decimal128Integer operator -(Decimal128Integer left, Decimal128Integer right)
     {
@@ -110,6 +131,10 @@ internal readonly struct Decimal128Integer : IEquatable<Decimal128Integer>
         return new Decimal128Integer(left.High - right.High - borrow, left.Low - right.Low);
     }
 
+    /// <summary>The difference of a value and a word. It wraps if the word is larger.</summary>
+    /// <param name="left">The value to subtract from.</param>
+    /// <param name="right">The word to subtract.</param>
+    /// <returns>The difference, modulo 2^128.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Decimal128Integer operator -(Decimal128Integer left, ulong right)
     {
@@ -117,65 +142,102 @@ internal readonly struct Decimal128Integer : IEquatable<Decimal128Integer>
         return new Decimal128Integer(left.High - borrow, left.Low - right);
     }
 
+    /// <summary>Whether two values are equal.</summary>
+    /// <param name="left">The first value.</param>
+    /// <param name="right">The second value.</param>
+    /// <returns>True if both words are equal.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator ==(Decimal128Integer left, Decimal128Integer right)
     {
         return ((left.High ^ right.High) | (left.Low ^ right.Low)) == 0;
     }
 
+    /// <summary>Whether two values differ.</summary>
+    /// <param name="left">The first value.</param>
+    /// <param name="right">The second value.</param>
+    /// <returns>True if either word differs.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator !=(Decimal128Integer left, Decimal128Integer right)
     {
         return ((left.High ^ right.High) | (left.Low ^ right.Low)) != 0;
     }
 
+    /// <summary>Whether one value is below another.</summary>
+    /// <param name="left">The first value.</param>
+    /// <param name="right">The second value.</param>
+    /// <returns>True if <paramref name="left"/> is less than <paramref name="right"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator <(Decimal128Integer left, Decimal128Integer right)
     {
         return (left.High < right.High) | ((left.High == right.High) & (left.Low < right.Low));
     }
 
+    /// <summary>Whether one value is above another.</summary>
+    /// <param name="left">The first value.</param>
+    /// <param name="right">The second value.</param>
+    /// <returns>True if <paramref name="left"/> is greater than <paramref name="right"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator >(Decimal128Integer left, Decimal128Integer right)
     {
         return right < left;
     }
 
+    /// <summary>Whether one value is at most another.</summary>
+    /// <param name="left">The first value.</param>
+    /// <param name="right">The second value.</param>
+    /// <returns>True if <paramref name="left"/> is less than or equal to <paramref name="right"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator <=(Decimal128Integer left, Decimal128Integer right)
     {
         return !(right < left);
     }
 
+    /// <summary>Whether one value is at least another.</summary>
+    /// <param name="left">The first value.</param>
+    /// <param name="right">The second value.</param>
+    /// <returns>True if <paramref name="left"/> is greater than or equal to <paramref name="right"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator >=(Decimal128Integer left, Decimal128Integer right)
     {
         return !(left < right);
     }
 
+    /// <summary>Compares this value with another, without branches.</summary>
+    /// <param name="other">The value to compare with.</param>
+    /// <returns>-1, 0, or 1 as this value is less than, equal to, or greater than <paramref name="other"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int CompareTo(Decimal128Integer other)
     {
         return Unsafe.BitCast<bool, byte>(other < this) - Unsafe.BitCast<bool, byte>(this < other);
     }
 
+    /// <summary>Whether this value equals another.</summary>
+    /// <param name="other">The value to compare with.</param>
+    /// <returns>True if both words are equal.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Equals(Decimal128Integer other)
     {
         return this == other;
     }
 
+    /// <summary>Whether this value equals an object.</summary>
+    /// <param name="obj">The object to compare with.</param>
+    /// <returns>True if <paramref name="obj"/> is a <see cref="Decimal128Integer"/> with the same words.</returns>
     public override bool Equals(object? obj)
     {
         return obj is Decimal128Integer other && Equals(other);
     }
 
+    /// <summary>A hash code built from both words.</summary>
+    /// <returns>The hash code.</returns>
     public override int GetHashCode()
     {
         return HashCode.Combine(High, Low);
     }
 
-    /// <summary>The low 128 bits of the product with a word, which the caller knows is all of it.</summary>
+    /// <summary>The low 128 bits of the product with a word. The caller must know the product fits in 128 bits.</summary>
+    /// <param name="multiplier">The word to multiply by.</param>
+    /// <returns>The product.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Decimal128Integer MultiplyBy(ulong multiplier)
     {
@@ -183,7 +245,9 @@ internal readonly struct Decimal128Integer : IEquatable<Decimal128Integer>
         return new Decimal128Integer(high + (High * multiplier), low);
     }
 
-    /// <summary>The low 128 bits of the product of two values, which the caller knows is all of it.</summary>
+    /// <summary>The low 128 bits of the product of two values. The caller must know the product fits in 128 bits.</summary>
+    /// <param name="multiplier">The value to multiply by.</param>
+    /// <returns>The product.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Decimal128Integer Multiply(Decimal128Integer multiplier)
     {
@@ -191,7 +255,8 @@ internal readonly struct Decimal128Integer : IEquatable<Decimal128Integer>
         return new Decimal128Integer(high + (Low * multiplier.High) + (High * multiplier.Low), low);
     }
 
-    /// <summary>Half the value, which for an even one is exact.</summary>
+    /// <summary>The value shifted right by one bit. It is exact for an even value.</summary>
+    /// <returns>Half the value, rounded down.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Decimal128Integer Halved()
     {
@@ -199,9 +264,10 @@ internal readonly struct Decimal128Integer : IEquatable<Decimal128Integer>
     }
 
     /// <summary>
-    /// The last decimal digit. A word is six more than a multiple of ten, so the high word
-    /// contributes six times its own last digit.
+    /// The last decimal digit. 2^64 is 6 more than a multiple of 10, so the high word adds
+    /// 6 times its own last digit.
     /// </summary>
+    /// <returns>The value modulo 10.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public uint LastDigit()
     {
@@ -209,8 +275,8 @@ internal readonly struct Decimal128Integer : IEquatable<Decimal128Integer>
     }
 
     /// <summary>
-    /// A word as a double, to the nearest fifty-three bits, converted as two signed halves
-    /// so that no conversion looks at a top bit.
+    /// A word converted to the nearest double. The word is converted as two signed 32-bit
+    /// halves, so no conversion branches on the top bit.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static double WordToDouble(ulong word)
@@ -218,7 +284,8 @@ internal readonly struct Decimal128Integer : IEquatable<Decimal128Integer>
         return ((double)(long)(word >> 32) * HalfWordScale) + (double)(long)(uint)word;
     }
 
-    /// <summary>The nearest double, which carries the top fifty-three bits.</summary>
+    /// <summary>The value converted to a double, which keeps the top 53 bits.</summary>
+    /// <returns>The value as a double.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public double ToDouble()
     {
@@ -226,13 +293,15 @@ internal readonly struct Decimal128Integer : IEquatable<Decimal128Integer>
     }
 
     /// <summary>
-    /// A double's integer part as two words. The value must be non-negative and below
-    /// 2^128. Each split is exact: the upper part takes the bits above a boundary, and
-    /// what is left is the bits below it, which a double holds whole. The low word is
-    /// split once more so that its conversions back are of values below 2^63; the high
-    /// word's conversion is the unsigned one, whose branch is predicted where this is
-    /// used, since the roots and corrections there stay far below 2^63.
+    /// The integer part of a double, as two words. The value must be non-negative and below
+    /// 2^128. Each split is exact: the upper part gets the bits above a boundary, and the
+    /// remainder is the bits below it, which a double holds exactly. The low word is split
+    /// again so that each part converts from a value below 2^63. The high word uses the
+    /// unsigned conversion. Its branch predicts well here, because the roots and corrections
+    /// that call this stay far below 2^63.
     /// </summary>
+    /// <param name="value">The double to convert.</param>
+    /// <returns>The integer part of <paramref name="value"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Decimal128Integer FromDouble(double value)
     {

@@ -9,43 +9,52 @@ using System.Text.Unicode;
 namespace Decimals.Internal;
 
 /// <summary>
-/// The specification's <c>to-scientific-string</c> and <c>to-engineering-string</c>, and the
-/// standard .NET format strings on top of them.
+/// The specification's <c>to-scientific-string</c> and <c>to-engineering-string</c>
+/// conversions, and the standard .NET format strings built on them.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Which notation is used is decided by the value, not by the caller: plain notation when
-/// the exponent is at most zero and the adjusted exponent is at least -6, exponential
-/// otherwise. So <c>5E-6</c> prints as <c>0.000005</c> and <c>5E-7</c> prints as itself.
-/// Trailing zeros are part of the value -- <c>1.00</c> and <c>1.0</c> are different members
-/// of the same cohort and print differently.
+/// The value chooses the notation, not the caller. Plain notation is used when the
+/// exponent is at most zero and the adjusted exponent is at least -6. Otherwise
+/// exponential notation is used. So <c>5E-6</c> prints as <c>0.000005</c>, and <c>5E-7</c>
+/// prints as <c>5E-7</c>. Trailing zeros are part of the value: <c>1.00</c> and <c>1.0</c>
+/// are different members of the same cohort and print differently.
 /// </para>
 /// <para>
-/// A finite value is planned as a <see cref="Decimal128TextLayout"/> and then written into
-/// its destination in one pass: a string is allocated at its exact length and filled in
-/// place, and a caller's span is written directly once its length is known to suffice.
-/// Nothing is copied on the way. A culture whose signs and separator are the ordinary
-/// characters takes the same path as the invariant one; only other symbols go through the
-/// general writer.
+/// A finite value is planned as a <see cref="Decimal128TextLayout"/> and then written to
+/// its destination in one pass. A string is allocated at its exact length and filled in
+/// place. A caller's span is written directly once it is known to be long enough. Nothing
+/// is copied. A culture whose signs and decimal separator are the ASCII characters takes
+/// the same path as the invariant culture. Only other symbols go through the general
+/// writer.
 /// </para>
 /// </remarks>
 [SkipLocalsInit]
 internal static class Decimal128Formatter
 {
-    /// <summary>A buffer that holds any finite value under the invariant symbols.</summary>
+    /// <summary>A buffer length that holds any finite value with the invariant symbols.</summary>
     public const int InvariantLength = Decimal128TextLayout.MaxLength;
 
-    /// <summary>A stack buffer that covers every culture whose symbols are of ordinary length.</summary>
+    /// <summary>A stack buffer length that covers every culture whose symbols have normal lengths.</summary>
     private const int StackBufferLength = 96;
 
-    /// <summary>The buffer that holds any coefficient's digits, and the most places fixed-point output takes.</summary>
+    /// <summary>
+    /// A buffer length that holds the digits of any coefficient or NaN payload. It is also
+    /// the largest number of decimal places the F and N formats accept.
+    /// </summary>
     private const int DigitBufferLength = 40;
 
+    /// <summary>The specification's to-scientific-string conversion.</summary>
+    /// <param name="bits">The encoded value.</param>
+    /// <returns>The value in scientific notation.</returns>
     public static string ToScientificString(Decimal128Integer bits)
     {
         return Render(bits, false);
     }
 
+    /// <summary>The specification's to-engineering-string conversion.</summary>
+    /// <param name="bits">The encoded value.</param>
+    /// <returns>The value in engineering notation.</returns>
     public static string ToEngineeringString(Decimal128Integer bits)
     {
         return Render(bits, true);
@@ -100,23 +109,22 @@ internal static class Decimal128Formatter
     }
 
     /// <summary>
-    /// The last read-only culture format found to write its symbols plainly. A culture's
-    /// format is one instance for the life of the process, so remembering it turns the
-    /// three comparisons below into one; a format that can still be changed is never
-    /// remembered.
+    /// The last read-only culture format found to use the plain symbols. A culture's format
+    /// is a single instance for the life of the process, so caching it replaces the three
+    /// comparisons below with one. A format that can still be changed is never cached.
     /// </summary>
     private static NumberFormatInfo? PlainFormat;
 
     /// <summary>
-    /// Whether a culture writes its signs and separator the way the specification does, in
-    /// which case its text is the invariant text. Nearly every culture .NET knows does for
-    /// the signs, and most do for the separator.
+    /// Whether a culture writes its signs and decimal separator the same way as the
+    /// specification. If it does, its text is the same as the invariant text. Nearly every
+    /// culture in .NET does for the signs, and most do for the separator.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool HasPlainSymbols(NumberFormatInfo numberFormat)
     {
-        // The invariant format is not named here: reading it is a call with a lazy
-        // initialization behind it, and it is remembered like any other once seen.
+        // The invariant format is not checked by name here. Reading it is a call with lazy
+        // initialization behind it, and it is cached like any other format once seen.
         return ReferenceEquals(numberFormat, PlainFormat) || CheckPlainSymbols(numberFormat);
     }
 
@@ -142,8 +150,8 @@ internal static class Decimal128Formatter
     }
 
     /// <summary>
-    /// The most room a special value can need: the widest of the culture's symbols, a
-    /// sign, an s, and a payload.
+    /// The largest length a special value can need: a sign, the longest of the culture's
+    /// symbols, an s, and a payload.
     /// </summary>
     private static int SpecialUpperBound(NumberFormatInfo numberFormat)
     {
@@ -157,8 +165,8 @@ internal static class Decimal128Formatter
     {
         var index = 0;
 
-        // An infinity carries its sign inside the symbol, which is why it is written before
-        // the sign rather than after it.
+        // An infinity symbol includes its sign, so infinity is handled before the sign is
+        // written.
         if (Decimal128Encoding.IsInfinity(bits))
         {
             Put(destination, ref index, Decimal128Encoding.IsNegative(bits)
@@ -173,8 +181,8 @@ internal static class Decimal128Formatter
             Put(destination, ref index, numberFormat.NegativeSign);
         }
 
-        // Neither a signaling NaN nor a diagnostic payload has a culture spelling, so both
-        // keep the specification's: an "s" ahead of the symbol, the payload's digits behind.
+        // A signaling NaN and a diagnostic payload have no culture spelling, so both use the
+        // specification's: an "s" before the symbol and the payload digits after it.
         if (Decimal128Encoding.IsSignalingNaN(bits))
         {
             destination[index++] = 's';
@@ -201,16 +209,20 @@ internal static class Decimal128Formatter
     }
 
     /// <summary>
-    /// Formats under a standard .NET format string. An empty or "G" format gives the
-    /// specification's scientific form, which is what <c>ToString()</c> produces, and "E"
-    /// the engineering form; "F" and "N" are done here on the digits, and the rest go to
-    /// the framework's formatting of the nearest double.
+    /// Formats with a standard .NET format string. An empty format or "G" gives the
+    /// specification's scientific form, which is what <c>ToString()</c> returns. "E" gives
+    /// the engineering form. "F" and "N" are formatted here from the digits. Other formats
+    /// use the framework's formatting of the nearest double.
     /// </summary>
+    /// <param name="bits">The encoded value.</param>
+    /// <param name="format">The format string.</param>
+    /// <param name="provider">The culture's symbols, or null for the current culture.</param>
+    /// <returns>The formatted value.</returns>
     public static string Format(Decimal128Integer bits, ReadOnlySpan<char> format, IFormatProvider? provider)
     {
         var numberFormat = NumberFormatInfo.GetInstance(provider);
 
-        if (TryReadNotation(format, out var engineering))
+        if (ReadNotation(format, out var engineering))
         {
             return Render(bits, engineering, numberFormat);
         }
@@ -221,8 +233,8 @@ internal static class Decimal128Formatter
         }
 
         var specifier = char.ToUpperInvariant(format[0]);
-        if ((specifier == 'F' || specifier == 'N') && TryReadPlaces(format[1..], out var places)
-            && TryFixed(bits, places, specifier == 'N', numberFormat, out var fixedText))
+        if ((specifier == 'F' || specifier == 'N') && ReadPlaces(format[1..]) is { } places
+            && FormatFixed(bits, places, specifier == 'N', numberFormat) is { } fixedText)
         {
             return fixedText;
         }
@@ -231,10 +243,10 @@ internal static class Decimal128Formatter
     }
 
     /// <summary>
-    /// Whether the format is one this writes itself, and which of the two notations it asks
-    /// for. Everything else goes through <see cref="Format"/>.
+    /// Whether this class writes the format itself, and which notation the format requests.
+    /// Other formats go through <see cref="Format"/>.
     /// </summary>
-    private static bool TryReadNotation(ReadOnlySpan<char> format, out bool engineering)
+    private static bool ReadNotation(ReadOnlySpan<char> format, out bool engineering)
     {
         if (format.IsEmpty || format.Equals("G", StringComparison.OrdinalIgnoreCase))
         {
@@ -252,28 +264,33 @@ internal static class Decimal128Formatter
         return false;
     }
 
-    private static bool TryReadPlaces(ReadOnlySpan<char> digits, out int places)
+    /// <summary>
+    /// The number of decimal places after an F or N specifier. No digits means two places.
+    /// The result is null if the digits are not a count this class accepts.
+    /// </summary>
+    private static int? ReadPlaces(ReadOnlySpan<char> digits)
     {
         if (digits.IsEmpty)
         {
-            places = 2;
-            return true;
+            return 2;
         }
 
-        return int.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out places)
-            && places <= DigitBufferLength;
+        if (!int.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out var places)
+            || places > DigitBufferLength)
+        {
+            return null;
+        }
+
+        return places;
     }
 
     /// <summary>
-    /// Fixed-point output to a number of places, rounded half to even the way the
-    /// framework's own fixed-point formatting rounds. A value whose integer part runs past
-    /// two machine words is left to the double path.
+    /// Fixed-point output to a number of decimal places, rounded half to even like the
+    /// framework's fixed-point formatting. A value that needs more than 38 digits at that
+    /// scale gives null, and the caller uses the double path.
     /// </summary>
-    private static bool TryFixed(Decimal128Integer bits, int places, bool grouped, NumberFormatInfo numberFormat,
-        out string text)
+    private static string? FormatFixed(Decimal128Integer bits, int places, bool grouped, NumberFormatInfo numberFormat)
     {
-        text = string.Empty;
-
         var coefficient = Decimal128Encoding.Unpack(bits, out var exponent);
         var negative = Decimal128Encoding.IsNegative(bits);
 
@@ -292,7 +309,7 @@ internal static class Decimal128Formatter
         {
             if (Decimal128Tables.CountDigits(coefficient) + lift > Decimal128Tables.MaxWidePower)
             {
-                return false;
+                return null;
             }
 
             scaled = Decimal128Tables.Scale(coefficient, lift);
@@ -320,8 +337,7 @@ internal static class Decimal128Formatter
             builder.Append(fraction);
         }
 
-        text = builder.ToString();
-        return true;
+        return builder.ToString();
     }
 
     private static void AppendWhole(ref Decimal128TextBuilder builder, ReadOnlySpan<char> whole, bool grouped,
@@ -345,32 +361,39 @@ internal static class Decimal128Formatter
         }
     }
 
+    /// <summary>Formats the value into a span of characters, with the same formats as <see cref="Format"/>.</summary>
+    /// <param name="bits">The encoded value.</param>
+    /// <param name="destination">Receives the text.</param>
+    /// <param name="written">Receives the number of characters written, or zero if the destination is too short.</param>
+    /// <param name="format">The format string. Empty gives scientific notation.</param>
+    /// <param name="provider">The culture's symbols, or null for the current culture.</param>
+    /// <returns>True if the text fit in <paramref name="destination"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool TryFormat(Decimal128Integer bits, Span<char> destination, out int written,
         ReadOnlySpan<char> format, IFormatProvider? provider)
     {
-        // The common call: no format, a finite value. Everything else steps aside.
+        // The common call: no format and a finite value. Everything else takes the slow path.
         if (format.IsEmpty && !Decimal128Encoding.IsSpecial(bits))
         {
-            return TryWriteFinite(bits, destination, out written, false, NumberFormatInfo.GetInstance(provider));
+            return WriteFinite(bits, destination, out written, false, NumberFormatInfo.GetInstance(provider));
         }
 
-        return TryFormatSlow(bits, destination, out written, format, provider);
+        return FormatSlow(bits, destination, out written, format, provider);
     }
 
-    private static bool TryFormatSlow(Decimal128Integer bits, Span<char> destination, out int written,
+    private static bool FormatSlow(Decimal128Integer bits, Span<char> destination, out int written,
         ReadOnlySpan<char> format, IFormatProvider? provider)
     {
-        if (TryReadNotation(format, out var engineering))
+        if (ReadNotation(format, out var engineering))
         {
             var numberFormat = NumberFormatInfo.GetInstance(provider);
 
             if (!Decimal128Encoding.IsSpecial(bits))
             {
-                return TryWriteFinite(bits, destination, out written, engineering, numberFormat);
+                return WriteFinite(bits, destination, out written, engineering, numberFormat);
             }
 
-            return TryWriteSpecial(bits, destination, out written, numberFormat);
+            return WriteSpecialIfFits(bits, destination, out written, numberFormat);
         }
 
         var text = Format(bits, format, provider);
@@ -386,12 +409,12 @@ internal static class Decimal128Formatter
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool TryWriteFinite(Decimal128Integer bits, Span<char> destination, out int written,
+    private static bool WriteFinite(Decimal128Integer bits, Span<char> destination, out int written,
         bool engineering, NumberFormatInfo numberFormat)
     {
         if (!HasPlainSymbols(numberFormat))
         {
-            return TryWriteFiniteCulture(bits, destination, out written, engineering, numberFormat);
+            return WriteFiniteCulture(bits, destination, out written, engineering, numberFormat);
         }
 
         var coefficient = Decimal128Encoding.Unpack(bits, out var exponent);
@@ -410,7 +433,7 @@ internal static class Decimal128Formatter
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static bool TryWriteFiniteCulture(Decimal128Integer bits, Span<char> destination, out int written,
+    private static bool WriteFiniteCulture(Decimal128Integer bits, Span<char> destination, out int written,
         bool engineering, NumberFormatInfo numberFormat)
     {
         var coefficient = Decimal128Encoding.Unpack(bits, out var exponent);
@@ -430,14 +453,14 @@ internal static class Decimal128Formatter
         return true;
     }
 
-    private static bool TryWriteSpecial(Decimal128Integer bits, Span<char> destination, out int written,
+    private static bool WriteSpecialIfFits(Decimal128Integer bits, Span<char> destination, out int written,
         NumberFormatInfo numberFormat)
     {
         var required = SpecialUpperBound(numberFormat);
 
-        // A span already wide enough for the longest this value could be is written into
-        // directly. The scratch buffer below is only there to keep a shorter one from
-        // being half filled before the length is known.
+        // A span long enough for the longest possible text is written directly. The scratch
+        // buffer below keeps a shorter span from being partly filled before the length is
+        // known.
         if (destination.Length >= required)
         {
             written = WriteSpecial(destination, bits, numberFormat);
@@ -461,13 +484,20 @@ internal static class Decimal128Formatter
     }
 
     /// <summary>
-    /// The same output as UTF-8. The digits and the exponent are ASCII, but a culture's
-    /// signs and separators need not be, so the text is transcoded rather than narrowed.
+    /// Writes the same output as UTF-8. The digits and the exponent are ASCII, but a
+    /// culture's signs and separators can be non-ASCII, so the text is transcoded instead
+    /// of narrowed.
     /// </summary>
+    /// <param name="bits">The encoded value.</param>
+    /// <param name="utf8Destination">Receives the UTF-8 text.</param>
+    /// <param name="written">Receives the number of bytes written, or zero if the destination is too short.</param>
+    /// <param name="format">The format string. Empty gives scientific notation.</param>
+    /// <param name="provider">The culture's symbols, or null for the current culture.</param>
+    /// <returns>True if the text fit in <paramref name="utf8Destination"/>.</returns>
     public static bool TryFormat(Decimal128Integer bits, Span<byte> utf8Destination, out int written,
         ReadOnlySpan<char> format, IFormatProvider? provider)
     {
-        if (TryReadNotation(format, out var engineering))
+        if (ReadNotation(format, out var engineering))
         {
             var numberFormat = NumberFormatInfo.GetInstance(provider);
             var required = Decimal128Encoding.IsSpecial(bits)
@@ -486,7 +516,7 @@ internal static class Decimal128Formatter
             }
             else
             {
-                TryWriteFinite(bits, buffer, out length, engineering, numberFormat);
+                WriteFinite(bits, buffer, out length, engineering, numberFormat);
             }
 
             if (Utf8.FromUtf16(buffer[..length], utf8Destination, out _, out written) != OperationStatus.Done)
@@ -509,9 +539,11 @@ internal static class Decimal128Formatter
     }
 
     /// <summary>
-    /// The nearest double, read from the value's own text so that the decimal value is what
-    /// is read rather than whichever binary fraction sits nearest its coefficient.
+    /// The nearest double, computed by parsing the value's text. The decimal value is
+    /// rounded to binary only once.
     /// </summary>
+    /// <param name="bits">The encoded value.</param>
+    /// <returns>The nearest double. A NaN gives NaN, and a value out of range gives an infinity.</returns>
     public static double ToDouble(Decimal128Integer bits)
     {
         if (Decimal128Encoding.IsNaN(bits))
@@ -536,7 +568,7 @@ internal static class Decimal128Formatter
             return value;
         }
 
-        // Out of double's range either way: the sign says which end.
+        // The value is outside double's range. The sign chooses the infinity.
         return negative ? double.NegativeInfinity : double.PositiveInfinity;
     }
 }

@@ -27,6 +27,7 @@
   <ItemGroup>
     <Content Include="..\TestData\DecTest\*.decTest" LinkBase="TestData/DecTest" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\TestData\Generated\*.decTest" LinkBase="TestData/Generated" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\TestData\Hfahmy\Sample\**\*.txt" LinkBase="TestData/Hfahmy/Sample" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

@@ -8,8 +8,7 @@ using System.Text;
 namespace Decimals.Conformance;
 
 /// <summary>
-/// Translates between the condition names on a testcase line and
-/// <see cref="DecTestStatus"/>.
+/// Converts between the condition names in test lines and <see cref="DecTestStatus"/>.
 /// </summary>
 public static class DecTestConditions
 {
@@ -31,13 +30,13 @@ public static class DecTestConditions
     private static readonly FrozenDictionary<string, DecTestStatus> ByName =
         Known.ToFrozenDictionary(entry => entry.Name, entry => entry.Flag, StringComparer.Ordinal);
 
-    /// <summary>Condition names are case-independent.</summary>
+    /// <summary>Parses a condition name. Names are not case-sensitive.</summary>
     public static bool TryParse(string name, out DecTestStatus flag)
     {
         return ByName.TryGetValue(name.ToLowerInvariant(), out flag);
     }
 
-    /// <summary>Renders a status word as its condition names, for failure reports.</summary>
+    /// <summary>Lists the condition names in a status, for failure reports.</summary>
     public static string Describe(DecTestStatus status)
     {
         if (status == DecTestStatus.None)

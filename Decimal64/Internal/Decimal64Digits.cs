@@ -8,32 +8,33 @@ using System.Runtime.InteropServices;
 namespace Decimals.Internal;
 
 /// <summary>
-/// Writing a value's decimal digits straight into a caller's characters, a fixed number of
-/// them, leading zeros included.
+/// Writes a value's decimal digits directly into a caller's characters. It writes a fixed
+/// number of digits, including leading zeros.
 /// </summary>
 /// <remarks>
 /// <para>
-/// The digits come out two at a time from a table of a hundred entries, each holding both
-/// characters of a pair as one 32-bit store. A value is first cut into eight-digit pieces
-/// with a 64-bit constant division, and each piece into four-digit and then two-digit
-/// ones with 32-bit constant divisions, all of which the JIT turns into multiplies.
+/// Digits are written two at a time from a 100-entry table. Each entry holds both
+/// characters of a pair, so one 32-bit store writes them. A value is first split into
+/// 8-digit pieces with a 64-bit division by a constant. Each piece is split into 4-digit
+/// and then 2-digit parts with 32-bit divisions by constants. The JIT turns all of these
+/// divisions into multiplies.
 /// </para>
 /// <para>
-/// The number of digits is the one thing that varies from call to call, and a branch on it
-/// mispredicts whenever the values are mixed, at fifteen cycles a time. So a run of up to
-/// eight digits is written without branching on its width: all four pairs are computed,
-/// each is stored at its place counted back from the run's end, and a pair that would fall
-/// before the start is stored at the start instead, where a later store puts the right
-/// characters over it. The exponent is written the same way.
+/// The number of digits varies from call to call. A branch on it mispredicts when the
+/// values are mixed, at about 15 cycles each time. So a run of up to 8 digits is written
+/// without branching on its length. All four pairs are computed, and each is stored at its
+/// position counted back from the end of the run. A pair that would start before the run
+/// is stored at the start instead, and a later store overwrites it with the right
+/// characters. The exponent is written the same way.
 /// </para>
 /// <para>
-/// A run longer than eight digits does branch on how many eight-digit pieces it has.
-/// Writing every piece a run could have and setting the spare ones aside was tried and
-/// cost more than the mispredictions it saved.
+/// A run longer than 8 digits does branch on how many 8-digit pieces it has. Writing every
+/// possible piece and discarding the extra ones was tried, and it cost more than the
+/// mispredictions it avoided.
 /// </para>
 /// <para>
-/// Nothing here checks bounds: the caller has sized the destination from the layout it is
-/// writing, and the writers take a reference to the first character of their field.
+/// Nothing here checks bounds. The caller sized the destination from the layout it is
+/// writing, and each writer takes a reference to the first character of its field.
 /// </para>
 /// </remarks>
 internal static class Decimal64Digits
@@ -41,9 +42,9 @@ internal static class Decimal64Digits
     private const uint EightDigits = 100000000;
 
     /// <summary>
-    /// The two characters of a pair, tens first, as the little-endian word one 32-bit store
-    /// lays down: entry ten times tens plus units is the character of the units digit in
-    /// the high half and that of the tens digit in the low half.
+    /// The two characters of each pair as one little-endian 32-bit word. Entry
+    /// 10 * tens + units holds the tens digit's character in the low half and the units
+    /// digit's character in the high half.
     /// </summary>
     private static ReadOnlySpan<uint> Pairs =>
     [
@@ -60,14 +61,17 @@ internal static class Decimal64Digits
     ];
 
     /// <summary>
-    /// Writes exactly <paramref name="count"/> digits of <paramref name="value"/>, which is
-    /// below ten to that count, starting at <paramref name="destination"/>.
+    /// Writes exactly <paramref name="count"/> digits of <paramref name="value"/>, starting
+    /// at <paramref name="destination"/>. The value must be below 10 to the power of count.
     /// </summary>
     /// <remarks>
-    /// One compact body, called rather than inlined: its pieces fold into it, and the
-    /// callers stay small enough to be inlined into theirs, which is what keeps a layout in
+    /// This method is not inlined. Its helpers are inlined into it, and its callers stay
+    /// small enough to be inlined into their own callers. That keeps the text layout in
     /// registers on the way here.
     /// </remarks>
+    /// <param name="value">The value to write.</param>
+    /// <param name="count">The number of digits to write, including leading zeros. It must be at most 24.</param>
+    /// <param name="destination">The first character to write. At least <paramref name="count"/> characters must follow it.</param>
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static void Write(ulong value, int count, ref char destination)
     {
@@ -91,7 +95,7 @@ internal static class Decimal64Digits
 
         if (count == 1)
         {
-            // A single character has nothing after it for a pair store to land on.
+            // A pair store would write past a single character, so write it directly.
             destination = (char)('0' + (uint)value);
             return;
         }
@@ -100,9 +104,12 @@ internal static class Decimal64Digits
     }
 
     /// <summary>
-    /// Writes a value's digits, as many as it has, ending at the end of
-    /// <paramref name="destination"/>, and returns how many there were.
+    /// Writes all of a value's digits so that they end at the end of
+    /// <paramref name="destination"/>. Returns the number of digits written.
     /// </summary>
+    /// <param name="value">The value to write.</param>
+    /// <param name="destination">The span whose end receives the digits. It must hold at least as many characters as the value has digits.</param>
+    /// <returns>The number of digits written. Zero writes one digit.</returns>
     public static int WriteTrailing(ulong value, Span<char> destination)
     {
         var count = Decimal64Tables.CountDigits(value);
@@ -112,15 +119,18 @@ internal static class Decimal64Digits
 
     /// <summary>
     /// Writes an exponent as <c>E</c>, a sign, and one to three digits, starting at
-    /// <paramref name="destination"/>, and returns how many characters that took: none for
-    /// an exponent of zero, though the three characters are put down all the same. The
-    /// magnitude must be below a thousand.
+    /// <paramref name="destination"/>. Returns the number of characters written, which is
+    /// zero for an exponent of zero even though characters are still stored. The magnitude
+    /// must be below 1000.
     /// </summary>
     /// <remarks>
-    /// The three-digit image is always formed, the pair store lands one place ahead of the
-    /// digits when only one is wanted, and the sign is put down last so that it covers what
-    /// that store left there.
+    /// The three-digit image is always computed. When there is only one digit, the pair
+    /// store lands one place early, on the sign's position. The sign is written last so it
+    /// overwrites that character.
     /// </remarks>
+    /// <param name="exponent">The exponent. Its magnitude must be below 1000.</param>
+    /// <param name="destination">The first character to write. At least five characters must follow it.</param>
+    /// <returns>The number of characters in the exponent text, or zero if the exponent is zero.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int WriteExponent(int exponent, ref char destination)
     {
@@ -135,9 +145,9 @@ internal static class Decimal64Digits
         var image = ('0' + hundreds) | ((ulong)pair << 16);
         var width = 1 + (magnitude >= 10 ? 1 : 0) + (magnitude >= 100 ? 1 : 0);
 
-        // The digits start two characters in. The pair belongs at the end of them, which
-        // is two in plus the width less two: the width itself. For a single digit that is
-        // one character early, on the sign's place, which the sign store then covers.
+        // The digits start at offset 2. The pair belongs at their end, at offset
+        // 2 + width - 2, which is the width. For a single digit that is one character early,
+        // on the sign's position, and the sign store then overwrites it.
         destination = 'E';
         StorePair(pair, ref destination, width);
         Unsafe.Add(ref destination, 2) = (char)(image >> ((3 - width) * 16));
@@ -167,11 +177,11 @@ internal static class Decimal64Digits
     }
 
     /// <summary>
-    /// Two to eight digits, right-aligned within <paramref name="count"/> characters and
-    /// written without a branch on the count. Pairs are stored from the most significant
-    /// down, each counted back from the end of the run; one that would start before the run
-    /// is stored at the start instead, and the stores that follow cover it. The top
-    /// character is stored last, since for an odd count it is the second half of a pair.
+    /// Writes 2 to 8 digits, right-aligned in <paramref name="count"/> characters, without
+    /// branching on the count. Pairs are stored from the most significant down, each at its
+    /// position counted back from the end of the run. A pair that would start before the run
+    /// is stored at the start instead, and later stores overwrite it. The first character is
+    /// stored last, because for an odd count it is the second half of a pair.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void WriteUpToEight(uint value, int count, ref char destination)

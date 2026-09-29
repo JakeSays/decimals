@@ -7,7 +7,6 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Unicode;
 
-
 namespace Decimals.Internal;
 
 /// <summary>
@@ -15,43 +14,50 @@ namespace Decimals.Internal;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Syntax is stricter than .NET's numeric parsing: no leading or trailing space, no group
-/// separators, no culture-specific decimal point. A leading or trailing decimal point is
-/// allowed (<c>.5</c> and <c>5.</c> both parse), two are not. Infinities are <c>inf</c> or
-/// <c>infinity</c> in any casing; NaNs are <c>nan</c> or <c>snan</c> with an optional
-/// payload of digits, whose significant length may not exceed fifteen.
+/// The syntax is stricter than .NET's numeric parsing: no leading or trailing spaces, no
+/// group separators, and no culture-specific decimal point. A leading or trailing decimal
+/// point is allowed (<c>.5</c> and <c>5.</c> both parse), but two points are not. An
+/// infinity is <c>inf</c> or <c>infinity</c>, in any case. A NaN is <c>nan</c> or
+/// <c>snan</c>, optionally followed by a payload of digits with at most 15 significant
+/// digits.
 /// </para>
 /// <para>
-/// A number of up to nineteen digits is read on one path: the digits are gathered four at a
-/// time from a word of characters, with the rest one at a time, and the value goes straight
-/// to the finalizer. Anything longer takes the general path, which gathers nineteen
-/// significant digits and folds everything past them into a sticky residue -- which can
-/// only tip a rounding that discards at least three digits above it.
+/// A number of up to 19 digits takes the fast path. Its digits are read four at a time
+/// from a word of characters, then one at a time, and the value goes directly to the
+/// finalizer. Longer text takes the general path. It keeps 19 significant digits and folds
+/// the rest into a sticky residue. The residue only affects a rounding that discards at
+/// least 3 of the kept digits.
 /// </para>
 /// </remarks>
 [SkipLocalsInit]
 internal static class Decimal64Parser
 {
     /// <summary>
-    /// An exponent past this cannot be reached by any value, so parsing clamps to it
-    /// rather than overflowing the arithmetic that computes it.
+    /// No value can reach an exponent beyond this, so parsing clamps the exponent to it
+    /// instead of letting the arithmetic overflow.
     /// </summary>
     private const int ExponentLimit = 1000000000;
 
     /// <summary>
-    /// Text up to this length is widened or rewritten on the stack; anything longer is
-    /// rented. The limit covers every number the format can hold, so renting is for
-    /// pathological input.
+    /// Text up to this length is converted or rewritten in a stack buffer. Longer text uses
+    /// a rented array. The limit covers every number the format can represent, so only
+    /// unusual input needs a rented array.
     /// </summary>
     private const int StackBufferLength = 128;
 
-    /// <summary>The digits a word gathers without overflowing.</summary>
+    /// <summary>The number of digits one word can hold without overflow.</summary>
     private const int WordDigits = Decimal64Tables.MaxPower;
 
     /// <summary>
-    /// The conversion a culture asks for: the text is rewritten into the specification's
-    /// grammar and then read by it, so one parser still computes every value.
+    /// Parses text in a culture's format. The text is rewritten into the specification's
+    /// syntax and then parsed, so one parser computes every value.
     /// </summary>
+    /// <param name="text">The culture-formatted text.</param>
+    /// <param name="styles">The styles allowed in the text.</param>
+    /// <param name="provider">The culture's symbols, or null for the current culture.</param>
+    /// <param name="rounding">The rounding mode for a value with too many digits.</param>
+    /// <param name="status">Receives ConversionSyntax if the text is invalid, and the conditions the rounding raises.</param>
+    /// <returns>The encoded value, or a quiet NaN if the text is invalid.</returns>
     public static ulong Parse(ReadOnlySpan<char> text, NumberStyles styles, IFormatProvider? provider,
         Decimal64Rounding rounding, ref Decimal64Status status)
     {
@@ -65,7 +71,7 @@ internal static class Decimal64Parser
 
         try
         {
-            if (!Decimal64CultureNormalizer.TryNormalize(text, styles, numberFormat, buffer, out var written))
+            if (Decimal64CultureNormalizer.Normalize(text, styles, numberFormat, buffer) is not { } written)
             {
                 return Malformed(ref status);
             }
@@ -82,9 +88,16 @@ internal static class Decimal64Parser
     }
 
     /// <summary>
-    /// The same, over UTF-8. A culture's symbols need not be ASCII -- an infinity is
-    /// <c>∞</c> in most of them -- so this decodes rather than narrowing.
+    /// Parses UTF-8 text in a culture's format. A culture's symbols can be non-ASCII (most
+    /// cultures use <c>∞</c> for infinity), so this decodes the text instead of narrowing
+    /// each byte.
     /// </summary>
+    /// <param name="utf8Text">The culture-formatted UTF-8 text.</param>
+    /// <param name="styles">The styles allowed in the text.</param>
+    /// <param name="provider">The culture's symbols, or null for the current culture.</param>
+    /// <param name="rounding">The rounding mode for a value with too many digits.</param>
+    /// <param name="status">Receives ConversionSyntax if the text is invalid, and the conditions the rounding raises.</param>
+    /// <returns>The encoded value, or a quiet NaN if the text is invalid.</returns>
     public static ulong Parse(ReadOnlySpan<byte> utf8Text, NumberStyles styles, IFormatProvider? provider,
         Decimal64Rounding rounding, ref Decimal64Status status)
     {
@@ -114,10 +127,13 @@ internal static class Decimal64Parser
     }
 
     /// <summary>
-    /// The specification's grammar over UTF-8 text. Every character it accepts is ASCII, so
-    /// a byte outside that range cannot appear in a number and the text is rejected without
-    /// being decoded.
+    /// Parses UTF-8 text in the specification's syntax. The syntax is all ASCII, so text
+    /// with any byte above 0x7F is rejected without being decoded.
     /// </summary>
+    /// <param name="utf8Text">The UTF-8 text.</param>
+    /// <param name="rounding">The rounding mode for a value with too many digits.</param>
+    /// <param name="status">Receives ConversionSyntax if the text is invalid, and the conditions the rounding raises.</param>
+    /// <returns>The encoded value, or a quiet NaN if the text is invalid.</returns>
     public static ulong Parse(ReadOnlySpan<byte> utf8Text, Decimal64Rounding rounding, ref Decimal64Status status)
     {
         char[]? rented = null;
@@ -149,6 +165,11 @@ internal static class Decimal64Parser
         }
     }
 
+    /// <summary>Parses text in the specification's syntax: the to-number conversion.</summary>
+    /// <param name="text">The text.</param>
+    /// <param name="rounding">The rounding mode for a value with too many digits.</param>
+    /// <param name="status">Receives ConversionSyntax if the text is invalid, and the conditions the rounding raises.</param>
+    /// <returns>The encoded value, or a quiet NaN if the text is invalid.</returns>
     public static ulong Parse(ReadOnlySpan<char> text, Decimal64Rounding rounding, ref Decimal64Status status)
     {
         var length = text.Length;
@@ -176,8 +197,8 @@ internal static class Decimal64Parser
             return Malformed(ref status);
         }
 
-        // A finite number begins with a digit or a point, and every special form begins
-        // with a letter, so one comparison decides which grammar applies.
+        // A finite number starts with a digit or a point, and every special value starts
+        // with a letter, so one comparison chooses the path.
         var lead = Unsafe.Add(ref start, index);
         if ((uint)(lead - '0') > 9 && lead != '.')
         {
@@ -199,8 +220,8 @@ internal static class Decimal64Parser
 
         if (digits > WordDigits)
         {
-            // More digits than a word gathers, leading zeros included: the general path
-            // counts significant digits and folds the rest into a residue.
+            // There are more digits than one word holds, counting leading zeros. The
+            // general path counts only significant digits and folds the rest into a residue.
             return ParseLong(text[(negative || start == '+' ? 1 : 0)..], negative, rounding, ref status);
         }
 
@@ -218,7 +239,7 @@ internal static class Decimal64Parser
             }
 
             index++;
-            if (!TryReadExponent(ref start, ref index, length, out exponent))
+            if (!ReadExponent(ref start, ref index, length, out exponent))
             {
                 return Malformed(ref status);
             }
@@ -229,17 +250,18 @@ internal static class Decimal64Parser
     }
 
     /// <summary>
-    /// Gathers a run of digits into the coefficient, four at a time while four remain and
-    /// the word has room for them, then one at a time. Past nineteen the digits are only
-    /// counted, so the caller can see the run outgrew the word.
+    /// Reads a run of digits into the coefficient: four at a time while four remain and the
+    /// word has room, then one at a time. Digits after the 19th are only counted, so the
+    /// caller can see that the run did not fit in a word.
     /// </summary>
     private static int ReadDigits(ref char start, int index, int length, ref ulong coefficient, ref int digits)
     {
         while (index + 4 <= length && digits <= WordDigits - 4)
         {
-            // Four characters as one word of four 16-bit lanes. Subtracting '0' from every
-            // lane leaves each digit's value, and a lane that was not a digit -- or that
-            // borrowed from a lower lane that was not -- shows a high nibble.
+            // Read four characters as one word of four 16-bit lanes, and subtract '0' from
+            // each lane, which leaves each digit's value. A lane that was not a digit, or
+            // that took a borrow from a lower lane that was not a digit, has a bit set above
+            // its low 4 bits, either directly or after 6 is added.
             var word = Unsafe.ReadUnaligned<ulong>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref start, index)));
             var lanes = word - 0x0030003000300030UL;
             if (((lanes | (lanes + 0x0006000600060006UL)) & 0xFFF0FFF0FFF0FFF0UL) != 0)
@@ -247,8 +269,8 @@ internal static class Decimal64Parser
                 break;
             }
 
-            // Fold the lanes: each even lane takes ten times itself plus the lane above it,
-            // and the two results combine as hundreds and units.
+            // Each even lane becomes 10 times itself plus the next lane. The two results are
+            // then combined as hundreds and units.
             var pairs = ((lanes * 10) + (lanes >> 16)) & 0x0000FFFF0000FFFFUL;
             var value = ((uint)pairs * 100) + (uint)(pairs >> 32);
 
@@ -278,10 +300,10 @@ internal static class Decimal64Parser
     }
 
     /// <summary>
-    /// Reads the exponent after the E through to the end of the text: an optional sign and
-    /// at least one digit, clamped rather than overflowed.
+    /// Reads the exponent after the E, up to the end of the text: an optional sign and at
+    /// least one digit. A large exponent is clamped instead of overflowing.
     /// </summary>
-    private static bool TryReadExponent(ref char start, ref int index, int length, out int exponent)
+    private static bool ReadExponent(ref char start, ref int index, int length, out int exponent)
     {
         exponent = 0;
         if (index == length)
@@ -343,10 +365,9 @@ internal static class Decimal64Parser
     }
 
     /// <summary>
-    /// The general path, for text with more digit characters than a word gathers. Leading
-    /// zeros carry no information beyond their position, and digits past the nineteenth
-    /// significant one cannot change the result beyond making it inexact, so they are
-    /// folded into a sticky residue rather than accumulated.
+    /// The general path, for text with more digits than one word holds. Leading zeros only
+    /// affect the position. Digits after the 19th significant digit can only make the result
+    /// inexact, so they are folded into a sticky residue instead of added to the coefficient.
     /// </summary>
     private static ulong ParseLong(ReadOnlySpan<char> text, bool negative, Decimal64Rounding rounding,
         ref Decimal64Status status)
@@ -419,14 +440,14 @@ internal static class Decimal64Parser
 
             position++;
             ref var start = ref MemoryMarshal.GetReference(text);
-            if (!TryReadExponent(ref start, ref position, text.Length, out exponent))
+            if (!ReadExponent(ref start, ref position, text.Length, out exponent))
             {
                 return Malformed(ref status);
             }
         }
 
-        // Digits folded into the sticky flag were dropped from the coefficient, so the
-        // exponent has to account for them.
+        // The digits folded into the residue are not in the coefficient, so the exponent is
+        // increased by their count.
         var residue = droppedNonZero ? Decimal64Residue.BelowHalf : Decimal64Residue.Exact;
         var scale = Math.Clamp((long)exponent - fractionDigits + droppedCount, -ExponentLimit, ExponentLimit);
 

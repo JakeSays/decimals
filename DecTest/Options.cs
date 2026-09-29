@@ -6,24 +6,36 @@ using System.Collections.Generic;
 namespace Decimals.DecTest;
 
 /// <summary>
-/// The command line: which files to run, against which formats, and how much to print.
+/// The parsed command line: the command, the input files, the targets, and the output
+/// settings.
 /// </summary>
 public sealed class Options
 {
-    private static readonly string[] AllTargets =
+    private static readonly Target[] AllTargets =
     [
-        "Decimal32", "Decimal64", "Decimal128"
+        Target.Decimal32, Target.Decimal64, Target.Decimal128
     ];
+
+    public DecTestCommand Command { get; private set; } = DecTestCommand.Run;
 
     public List<string> Inputs { get; } = [];
 
-    public List<string> Targets { get; } = [];
+    public List<Target> Targets { get; } = [];
+
+    /// <summary>True when the inputs are Sayed-Ahmed and Fahmy vector files instead of .decTest files.</summary>
+    public bool RunVectorTests { get; private set; }
+
+    /// <summary>The directory that holds the full vector set.</summary>
+    public string FullDirectory { get; private set; } = string.Empty;
+
+    /// <summary>The directory the sample is written to.</summary>
+    public string SampleDirectory { get; private set; } = string.Empty;
 
     public int MaxReportedFailures { get; private set; } = 25;
 
-    public bool Quiet { get; private set; }
+    public bool RunQuietly { get; private set; }
 
-    public bool ShowSkips { get; private set; }
+    public bool ShowSkippedTests { get; private set; }
 
     public static bool TryParse(string[] args, out Options options, out string error)
     {
@@ -37,10 +49,13 @@ public sealed class Options
             switch (argument)
             {
                 case "--quiet":
-                    options.Quiet = true;
+                    options.RunQuietly = true;
                     continue;
                 case "--show-skips":
-                    options.ShowSkips = true;
+                    options.ShowSkippedTests = true;
+                    continue;
+                case "--vectors":
+                    options.RunVectorTests = true;
                     continue;
                 case "--max-failures":
                     if (index + 1 >= args.Length || !int.TryParse(args[index + 1], out var maximum))
@@ -53,14 +68,37 @@ public sealed class Options
                     index++;
                     continue;
                 case "--target":
-                    if (index + 1 >= args.Length || Array.IndexOf(AllTargets, args[index + 1]) < 0)
+                    if (index + 1 >= args.Length || !TryParseTarget(args[index + 1], out var target))
                     {
                         error = "--target needs one of " + string.Join(", ", AllTargets);
                         return false;
                     }
 
-                    options.Targets.Add(args[index + 1]);
+                    options.Targets.Add(target);
                     index++;
+                    continue;
+                case "--fetch-hfahmy":
+                    if (index + 1 >= args.Length)
+                    {
+                        error = "--fetch-hfahmy needs a directory";
+                        return false;
+                    }
+
+                    options.Command = DecTestCommand.FetchHfahmy;
+                    options.FullDirectory = args[index + 1];
+                    index++;
+                    continue;
+                case "--sample-hfahmy":
+                    if (index + 2 >= args.Length)
+                    {
+                        error = "--sample-hfahmy needs the full-set directory and the sample directory";
+                        return false;
+                    }
+
+                    options.Command = DecTestCommand.SampleHfahmy;
+                    options.FullDirectory = args[index + 1];
+                    options.SampleDirectory = args[index + 2];
+                    index += 2;
                     continue;
             }
 
@@ -73,7 +111,7 @@ public sealed class Options
             options.Inputs.Add(argument);
         }
 
-        if (options.Inputs.Count == 0)
+        if (options.Command == DecTestCommand.Run && options.Inputs.Count == 0)
         {
             error = "no testcase file or directory named";
             return false;
@@ -87,16 +125,42 @@ public sealed class Options
         return true;
     }
 
+    /// <summary>
+    /// Parses a target name. Enum.TryParse is not used because it also accepts numbers,
+    /// so "--target 7" would pass.
+    /// </summary>
+    private static bool TryParseTarget(string name, out Target target)
+    {
+        foreach (var candidate in AllTargets)
+        {
+            if (string.Equals(candidate.ToString(), name, StringComparison.Ordinal))
+            {
+                target = candidate;
+                return true;
+            }
+        }
+
+        target = Target.Decimal64;
+        return false;
+    }
+
     public static void PrintUsage()
     {
-        Console.WriteLine("usage: dectest-cs [options] <file-or-directory>...");
+        Console.WriteLine("usage: dectest [options] <file-or-directory>...");
+        Console.WriteLine("       dectest --fetch-hfahmy <full-directory>");
+        Console.WriteLine("       dectest --sample-hfahmy <full-directory> <sample-directory>");
         Console.WriteLine();
-        Console.WriteLine("  Runs the .decTest corpus against the managed decimal types. A test whose");
-        Console.WriteLine("  directives do not describe the target format is skipped, so every group can");
-        Console.WriteLine("  be pointed at every target.");
+        Console.WriteLine("  Runs the .decTest corpus, or with --vectors the Sayed-Ahmed and Fahmy test");
+        Console.WriteLine("  vectors, against the managed decimal types. A test for another format is");
+        Console.WriteLine("  skipped, so every file can be pointed at every target.");
+        Console.WriteLine();
+        Console.WriteLine("  --fetch-hfahmy downloads the full vector set, checks it against the published");
+        Console.WriteLine("  md5 sums, and unpacks it. --sample-hfahmy writes every hundredth vector of the");
+        Console.WriteLine("  full set to the sample directory.");
         Console.WriteLine();
         Console.WriteLine("options:");
         Console.WriteLine("  --target <name>       Decimal32, Decimal64, or Decimal128 (default: all three)");
+        Console.WriteLine("  --vectors             the inputs are vector files or directories of them");
         Console.WriteLine("  --max-failures <n>    describe at most <n> failures (default 25)");
         Console.WriteLine("  --quiet               omit the per-file result lines");
         Console.WriteLine("  --show-skips          tally the reasons tests were skipped");

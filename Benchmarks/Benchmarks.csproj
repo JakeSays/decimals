@@ -3,13 +3,10 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <RootNamespace>Decimals.Benchmarks</RootNamespace>
-    <!-- No AssemblyName override here, unlike DecTest: BenchmarkDotNet locates the project
-         file by searching for one named after the assembly, and builds the generated
-         boilerplate against it. A kebab-case binary name would leave it unable to find
-         this project at all. -->
+    <!-- Do not set AssemblyName. BenchmarkDotNet finds the project file by the assembly
+         name, so a different name would stop it from finding this project. -->
     <IsPackable>false</IsPackable>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
-    <!-- BenchmarkDotNet refuses to measure a debug build, and says so loudly. -->
     <Optimize>true</Optimize>
   </PropertyGroup>
 

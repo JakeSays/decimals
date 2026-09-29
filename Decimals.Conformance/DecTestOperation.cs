@@ -4,7 +4,7 @@
 namespace Decimals.Conformance;
 
 /// <summary>
-/// The operation keyword of a testcase line.
+/// The operation named in a test line.
 /// </summary>
 public enum DecTestOperation
 {

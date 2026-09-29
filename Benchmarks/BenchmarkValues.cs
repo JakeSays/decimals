@@ -6,21 +6,20 @@ using System.Globalization;
 namespace Decimals.Benchmarks;
 
 /// <summary>
-/// The operands every benchmark runs on, built the way the C++ <c>decbench</c> builds its
-/// own so the two sets of numbers can be read against each other.
+/// The operands for all benchmarks. They are built the same way as the C++ <c>decbench</c>
+/// operands, so the results can be compared.
 /// </summary>
 /// <remarks>
 /// <para>
-/// The wide set is decbench's: one to sixteen digits at exponents from -40 to +40, and it
-/// is the one whose absolute numbers can be read against the C++ figures. The short set is
-/// the same shape at decimal32's width, and the full-width set fills a decimal128
-/// coefficient.
+/// The wide set matches decbench: 1 to 16 digits, with exponents from -40 to +40. Its
+/// results can be compared directly with the C++ results. The short set has the same shape
+/// at decimal32's width. The full-width set fills a decimal128 coefficient.
 /// </para>
 /// <para>
-/// The operands are text, and each benchmark parses them into its own type during setup.
-/// The index pattern is decbench's too: an operation takes its operands from positions
-/// <c>i</c>, <c>i*7+3</c>, and <c>i*13+5</c>, so consecutive operations do not run on
-/// consecutive array entries and the operand pairing keeps changing.
+/// The operands are text. Each benchmark parses them into its own type during setup. The
+/// operand indexes also match decbench: an operation takes its operands from positions
+/// <c>i</c>, <c>i*7+3</c>, and <c>i*13+5</c>. This way, consecutive operations do not use
+/// consecutive array entries, and the operand pairs keep changing.
 /// </para>
 /// </remarks>
 public static class BenchmarkValues
@@ -43,10 +42,9 @@ public static class BenchmarkValues
     public static string[] FullWidthText { get; }
 
     /// <summary>
-    /// The wide set's shape at decimal32's width: one to seven digits at exponents from
-    /// -40 to +40. The wide set itself is sixteen digits, and every one of those operands
-    /// rounds on the way into a seven-digit format, which would make the parse the only
-    /// thing being measured.
+    /// The wide set's shape at decimal32's width: 1 to 7 digits, with exponents from -40 to
+    /// +40. The wide set has up to 16 digits, and those operands would round when parsed
+    /// into a 7-digit format, so the benchmarks would mostly measure that rounding.
     /// </summary>
     public static string[] Short32Text { get; }
 
@@ -57,9 +55,9 @@ public static class BenchmarkValues
     public static int Third(int index) => ((index * 13) + 5) & (Count - 1);
 
     /// <summary>
-    /// Decimal128 operands at the full width of its coefficient. The wide set tops out at
-    /// sixteen digits, whose products still fit thirty-four and so never round; these do,
-    /// which is the only way to see the format carry out the work it skips there.
+    /// Decimal128 operands that fill the 34-digit coefficient. Products of the wide set's
+    /// 16-digit operands fit in 34 digits and never round. Products of these operands do
+    /// round, so they measure the rounding paths.
     /// </summary>
     private static string[] BuildFullWidthText()
     {
@@ -96,7 +94,7 @@ public static class BenchmarkValues
         var digits = new char[digitCount];
         for (var position = 0; position < digitCount; position++)
         {
-            // A leading zero would make the coefficient shorter than asked for.
+            // The first digit is never zero, so the coefficient has the requested length.
             digits[position] = position == 0
                 ? (char)('1' + random.Next(0, 9))
                 : (char)('0' + random.Next(0, 10));
@@ -107,8 +105,8 @@ public static class BenchmarkValues
 
     private static string[] BuildText(int exponentLimit)
     {
-        // Fixed seed: the operands have to be the same set from run to run, or a change in
-        // the numbers could be the operands rather than the code.
+        // Fixed seed, so every run uses the same operands. Otherwise a change in the results
+        // could come from the operands instead of the code.
         var random = new Random(20260817);
         var values = new string[Count];
 

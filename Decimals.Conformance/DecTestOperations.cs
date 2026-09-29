@@ -7,7 +7,8 @@ using System.Collections.Generic;
 namespace Decimals.Conformance;
 
 /// <summary>
-/// What the runner needs to know about an operation keyword.
+/// Facts about each operation that the runner needs: its keyword, its operand count, and
+/// how it reports conditions.
 /// </summary>
 public static class DecTestOperations
 {
@@ -15,7 +16,7 @@ public static class DecTestOperations
 
     private static readonly FrozenDictionary<DecTestOperation, int> OperandCounts = BuildOperandCounts();
 
-    /// <summary>Operation keywords are case-independent.</summary>
+    /// <summary>Parses an operation keyword. Keywords are not case-sensitive.</summary>
     public static bool TryParse(string keyword, out DecTestOperation operation)
     {
         return ByKeyword.TryGetValue(keyword.ToLowerInvariant(), out operation);
@@ -27,9 +28,9 @@ public static class DecTestOperations
     }
 
     /// <summary>
-    /// toSci, toEng, and apply are the operations whose operand is converted under the
-    /// format's own rules and whose conversion conditions are part of the expected result.
-    /// Everything else reports only what the operation itself raised.
+    /// True for toSci, toEng, and apply. For these, the conditions raised while converting
+    /// the operand are part of the expected result. Other operations report only the
+    /// conditions raised by the operation itself.
     /// </summary>
     public static bool ReportsConversionConditions(DecTestOperation operation)
     {
@@ -37,10 +38,10 @@ public static class DecTestOperations
     }
 
     /// <summary>
-    /// Operations whose result is a number the format had to round or clamp to hold. Only
-    /// these keep the conditions raised getting their operands into the format: a
-    /// comparison or a copy reports nothing of its own, so it reports nothing from its
-    /// operands either.
+    /// True for operations whose result may be rounded or clamped to fit the format. Only
+    /// these keep the conditions raised while converting their operands. A comparison or a
+    /// copy raises no conditions of its own, so it does not report its operands' conditions
+    /// either.
     /// </summary>
     public static bool ProducesRoundedResult(DecTestOperation operation)
     {
@@ -51,7 +52,7 @@ public static class DecTestOperations
             or DecTestOperation.ToSci or DecTestOperation.ToEng or DecTestOperation.Apply;
     }
 
-    /// <summary>These produce a string rather than a number.</summary>
+    /// <summary>True for operations that return text instead of a number.</summary>
     public static bool ProducesText(DecTestOperation operation)
     {
         return operation is DecTestOperation.ToSci or DecTestOperation.ToEng or DecTestOperation.Class;
@@ -65,7 +66,7 @@ public static class DecTestOperations
             map[operation.ToString().ToLowerInvariant()] = operation;
         }
 
-        // The three keywords the corpus does not spell the way the enum does.
+        // The corpus spells these three keywords differently from the enum names.
         map["comparesig"] = DecTestOperation.CompareSig;
         map["comparetotmag"] = DecTestOperation.CompareTotalMag;
         map["tointegralx"] = DecTestOperation.ToIntegralX;

@@ -2,15 +2,19 @@
 // SPDX-License-Identifier: MIT
 
 using System.Collections.Generic;
+using System.Text;
 
 namespace Decimals.Conformance;
 
 /// <summary>
-/// Splits a testcase line into tokens: space-delimited, with single- or double-quoted runs
-/// held together and a doubled quote standing for one literal quote. A token beginning with
-/// two hyphens starts commentary that runs to the end of the line; the same two characters
-/// inside a token do not.
+/// Splits a test line into tokens.
 /// </summary>
+/// <remarks>
+/// Tokens are separated by spaces or tabs. Text in single or double quotes is one token,
+/// and a doubled quote inside it stands for one quote character. Two hyphens at the start
+/// of a token begin a comment that runs to the end of the line. Two hyphens inside a token
+/// do not.
+/// </remarks>
 public static class DecTestTokenizer
 {
     public static bool TryTokenize(ReadOnlySpan<char> line, List<DecTestToken> tokens, out string error)
@@ -61,7 +65,7 @@ public static class DecTestTokenizer
         var delimiter = line[position];
         position++;
 
-        var builder = new System.Text.StringBuilder();
+        var builder = new StringBuilder();
         while (position < line.Length)
         {
             if (line[position] != delimiter)

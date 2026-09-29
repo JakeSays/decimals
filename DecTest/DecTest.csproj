@@ -3,9 +3,10 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <RootNamespace>Decimals.DecTest</RootNamespace>
-    <AssemblyName>dectest-cs</AssemblyName>
+    <AssemblyName>dectest</AssemblyName>
     <IsPackable>false</IsPackable>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <PublishAot>true</PublishAot>
   </PropertyGroup>
 
   <ItemGroup>

@@ -6,36 +6,44 @@ using System.Runtime.CompilerServices;
 namespace Decimals.Internal;
 
 /// <summary>
-/// The arithmetic operations: encoding in, encoding out, with the special values settled
-/// before the coefficients are looked at.
+/// The arithmetic operations. Each takes encoded operands and returns an encoded result,
+/// and handles the special values before it reads the coefficients.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Every path here works on a coefficient in a machine word and an exponent in an integer.
-/// A product of two seven-digit coefficients has fourteen digits and fits the word, so the
-/// one intermediate that does not fit is an operand aligned far above the other, which is
-/// cut down to nineteen digits and a <see cref="Decimal32Residue"/> before it is added; the
-/// finalizer then rounds once.
+/// Every path here works on a coefficient in a 64-bit word and an exponent in an int. The
+/// product of two 7-digit coefficients has at most 14 digits and fits in a word. So the
+/// only intermediate value that does not fit is an operand aligned far above the other.
+/// It is reduced to 19 digits and a <see cref="Decimal32Residue"/> before the addition, and
+/// the finalizer then rounds once.
 /// </para>
 /// <para>
-/// Alignment works on the value with the higher exponent. Scaling it up to meet the lower
-/// one is exact while the result fits nineteen digits; past that it is scaled to exactly
-/// nineteen digits and the lower operand is folded to that exponent instead, its discarded
-/// digits becoming the residue. Only the lower operand is ever folded, and when it is, the
-/// higher one has at least eighteen digits above the fold, so no subtraction can cancel
-/// down into it.
+/// Alignment scales the operand with the higher exponent. Scaling it down to the lower
+/// exponent is exact while the result fits in 19 digits. Beyond that, it is scaled to
+/// exactly 19 digits, and the lower operand is folded to that exponent instead, with its
+/// discarded digits becoming the residue. Only the lower operand is ever folded. When it
+/// is, the higher operand has at least 18 digits above the fold, so no subtraction can
+/// cancel into it.
 /// </para>
 /// </remarks>
 internal static class Decimal32Arithmetic
 {
     private const int WideDigits = Decimal32Tables.MaxPower;
 
-    /// <summary>Digits of quotient a division computes: the precision and one to round on.</summary>
+    /// <summary>The number of quotient digits a division computes: the precision plus one for rounding.</summary>
     private const int QuotientDigits = Decimal32Encoding.Precision + 1;
 
-    // The special values, settled the same way in every operation: a signaling NaN is
-    // invalid and comes out quiet, a quiet NaN passes through, left before right.
+    // Every operation handles the special values the same way: a signaling NaN is invalid
+    // and becomes quiet, and a quiet NaN passes through. The left operand is checked first.
 
+    /// <summary>
+    /// The NaN result of an operation with two operands, at least one of which is a NaN. A
+    /// signaling NaN is chosen over a quiet one, and the left operand over the right.
+    /// </summary>
+    /// <param name="left">The encoded left operand.</param>
+    /// <param name="right">The encoded right operand.</param>
+    /// <param name="status">Receives InvalidOperation if either operand is a signaling NaN.</param>
+    /// <returns>The chosen NaN, made quiet.</returns>
     public static uint PropagateNaN(uint left, uint right, ref Decimal32Status status)
     {
         if (Decimal32Encoding.IsSignalingNaN(left))
@@ -53,6 +61,10 @@ internal static class Decimal32Arithmetic
         return Decimal32Encoding.Quiet(Decimal32Encoding.IsNaN(left) ? left : right);
     }
 
+    /// <summary>The NaN result of an operation with one operand, which is a NaN.</summary>
+    /// <param name="value">The encoded NaN.</param>
+    /// <param name="status">Receives InvalidOperation if the value is a signaling NaN.</param>
+    /// <returns>The NaN, made quiet.</returns>
     public static uint PropagateNaN(uint value, ref Decimal32Status status)
     {
         if (Decimal32Encoding.IsSignalingNaN(value))
@@ -63,6 +75,9 @@ internal static class Decimal32Arithmetic
         return Decimal32Encoding.Quiet(value);
     }
 
+    /// <summary>The result of an invalid operation.</summary>
+    /// <param name="status">Receives InvalidOperation.</param>
+    /// <returns>The default quiet NaN.</returns>
     public static uint Invalid(ref Decimal32Status status)
     {
         status |= Decimal32Status.InvalidOperation;
@@ -71,6 +86,12 @@ internal static class Decimal32Arithmetic
 
     // Addition and subtraction.
 
+    /// <summary>Adds two values.</summary>
+    /// <param name="left">The encoded left operand.</param>
+    /// <param name="right">The encoded right operand.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded sum, rounded to the format.</returns>
     public static uint Add(uint left, uint right, Decimal32Rounding rounding, ref Decimal32Status status)
     {
         if (Decimal32Encoding.IsSpecial(left) || Decimal32Encoding.IsSpecial(right))
@@ -91,9 +112,14 @@ internal static class Decimal32Arithmetic
     }
 
     /// <summary>
-    /// Subtraction is addition with the right operand's sign flipped -- after the NaNs are
-    /// settled, since a NaN keeps the sign it arrived with.
+    /// Subtraction is addition with the right operand's sign flipped. The sign is flipped
+    /// after the NaNs are handled, because a NaN keeps its original sign.
     /// </summary>
+    /// <param name="left">The encoded value to subtract from.</param>
+    /// <param name="right">The encoded value to subtract.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded difference, rounded to the format.</returns>
     public static uint Subtract(uint left, uint right, Decimal32Rounding rounding, ref Decimal32Status status)
     {
         if (Decimal32Encoding.IsSpecial(left) || Decimal32Encoding.IsSpecial(right))
@@ -120,7 +146,7 @@ internal static class Decimal32Arithmetic
             if (Decimal32Encoding.IsInfinity(right)
                 && Decimal32Encoding.IsNegative(left) != Decimal32Encoding.IsNegative(right))
             {
-                // Infinities of opposite sign have no sum.
+                // The sum of infinities with opposite signs is invalid.
                 return Invalid(ref status);
             }
 
@@ -131,9 +157,18 @@ internal static class Decimal32Arithmetic
     }
 
     /// <summary>
-    /// Adds two finite values given as sign, coefficient of at most seven digits, and
-    /// exponent.
+    /// Adds two finite values, each given as a sign, a coefficient of at most 7 digits, and
+    /// an exponent.
     /// </summary>
+    /// <param name="leftNegative">Whether the left operand is negative.</param>
+    /// <param name="leftCoefficient">The left operand's coefficient.</param>
+    /// <param name="leftExponent">The left operand's exponent.</param>
+    /// <param name="rightNegative">Whether the right operand is negative.</param>
+    /// <param name="rightCoefficient">The right operand's coefficient.</param>
+    /// <param name="rightExponent">The right operand's exponent.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded sum, rounded to the format.</returns>
     public static uint AddFinite(bool leftNegative, ulong leftCoefficient, int leftExponent,
         bool rightNegative, ulong rightCoefficient, int rightExponent, Decimal32Rounding rounding,
         ref Decimal32Status status)
@@ -144,7 +179,7 @@ internal static class Decimal32Arithmetic
                 rightCoefficient, rightExponent, rounding, ref status);
         }
 
-        // The operand with the higher exponent is the one that gets scaled.
+        // The operand with the higher exponent is scaled. Put it on the left.
         if (leftExponent < rightExponent)
         {
             var heldNegative = leftNegative;
@@ -185,8 +220,9 @@ internal static class Decimal32Arithmetic
                 rounding, ref status);
         }
 
-        // Too far apart to align exactly: the higher operand goes to nineteen digits and the
-        // lower one is folded up to that exponent, which loses nothing that rounding needs.
+        // The exponents are too far apart to align exactly. The higher operand is scaled to
+        // 19 digits, and the lower operand is folded to that exponent. The fold keeps
+        // everything the rounding needs.
         var widen = WideDigits - leftDigits;
         var wide = leftCoefficient * Decimal32Tables.PowerOfTen(widen);
         var exponent = leftExponent - widen;
@@ -216,23 +252,23 @@ internal static class Decimal32Arithmetic
                 rounding, ref status);
         }
 
-        // Subtracting an inexact operand takes one more unit off, and the fraction of that
-        // unit left behind is the flipped residue.
+        // Subtracting an inexact operand subtracts one more unit. The residue is flipped to
+        // describe what remains of that unit.
         return Decimal32Finalizer.Finalize(leftNegative, wide - folded - 1, exponent, Decimal32Rounder.Flip(residue),
             rounding, ref status);
     }
 
     /// <summary>
-    /// The difference of two coefficients at the same exponent and opposite signs, which
-    /// takes the sign of the larger.
+    /// The difference of two coefficients with the same exponent and opposite signs. The
+    /// result takes the sign of the larger coefficient.
     /// </summary>
     private static uint SubtractAligned(bool leftNegative, ulong left, bool rightNegative, ulong right,
         int exponent, Decimal32Rounding rounding, ref Decimal32Status status)
     {
         if (left == right)
         {
-            // Opposite signs canceling exactly gives a positive zero, except when the
-            // rounding runs toward negative infinity.
+            // Opposite signs that cancel exactly give positive zero, except when rounding
+            // toward negative infinity.
             return Decimal32Finalizer.Zero(rounding == Decimal32Rounding.Floor, exponent, ref status);
         }
 
@@ -247,8 +283,9 @@ internal static class Decimal32Arithmetic
     }
 
     /// <summary>
-    /// A zero operand contributes only its exponent, and only when that is the lower of the
-    /// two: the other operand is padded down to meet it as far as the precision allows.
+    /// Adds when at least one operand is zero. A zero operand contributes only its exponent,
+    /// and only when that exponent is the lower one. The other operand is then padded with
+    /// zeros toward it, as far as the precision allows.
     /// </summary>
     private static uint AddWithZero(bool leftNegative, ulong leftCoefficient, int leftExponent,
         bool rightNegative, ulong rightCoefficient, int rightExponent, Decimal32Rounding rounding,
@@ -256,8 +293,8 @@ internal static class Decimal32Arithmetic
     {
         if (leftCoefficient == 0 && rightCoefficient == 0)
         {
-            // Two zeros keep the lower exponent, and the sign is theirs only when they
-            // agree; otherwise it follows the rounding.
+            // Two zeros give the lower exponent. The result keeps their sign if they agree.
+            // Otherwise the rounding mode chooses the sign.
             var negative = leftNegative == rightNegative
                 ? leftNegative
                 : rounding == Decimal32Rounding.Floor;
@@ -290,7 +327,8 @@ internal static class Decimal32Arithmetic
             var digits = Decimal32Tables.CountDigits(coefficient);
             if (digits + pad > Decimal32Encoding.Precision)
             {
-                // Only so many zeros fit; the value is unchanged, but digits went.
+                // Only this many zeros fit. The value is unchanged, but the exponent could not
+                // reach the zero's exponent, which counts as rounding.
                 pad = Decimal32Encoding.Precision - digits;
                 status |= Decimal32Status.Rounded;
             }
@@ -303,10 +341,15 @@ internal static class Decimal32Arithmetic
     }
 
     /// <summary>
-    /// Applies the context to a value without otherwise changing it, which is addition to a
-    /// zero of the value's own exponent. That zero is what makes <c>plus -0</c> a positive
-    /// zero under every rounding but one. <paramref name="negate"/> makes it a subtraction.
+    /// Applies the context to a value without otherwise changing it, by adding it to a zero
+    /// with the same exponent. That zero makes <c>plus -0</c> a positive zero under every
+    /// rounding mode except Floor. <paramref name="negate"/> makes it a subtraction.
     /// </summary>
+    /// <param name="value">The encoded operand.</param>
+    /// <param name="negate">Whether the value is subtracted from the zero instead of added to it.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded result, rounded to the format.</returns>
     public static uint AddToZero(uint value, bool negate, Decimal32Rounding rounding, ref Decimal32Status status)
     {
         if (Decimal32Encoding.IsSpecial(value))
@@ -328,9 +371,14 @@ internal static class Decimal32Arithmetic
     // Multiplication.
 
     /// <summary>
-    /// The product of two coefficients of at most seven digits has at most fourteen, so it
-    /// is exact in the word and the finalizer rounds it.
+    /// Multiplies two values. The product of two coefficients of at most 7 digits has at
+    /// most 14 digits, so it is exact in a word, and the finalizer rounds it.
     /// </summary>
+    /// <param name="left">The encoded left operand.</param>
+    /// <param name="right">The encoded right operand.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded product, rounded to the format.</returns>
     public static uint Multiply(uint left, uint right, Decimal32Rounding rounding, ref Decimal32Status status)
     {
         if (Decimal32Encoding.IsSpecial(left) || Decimal32Encoding.IsSpecial(right))
@@ -351,7 +399,7 @@ internal static class Decimal32Arithmetic
             leftExponent + rightExponent, Decimal32Residue.Exact, rounding, ref status);
     }
 
-    /// <summary>At least one operand is infinite and neither is a NaN.</summary>
+    /// <summary>Multiplies when at least one operand is infinite and neither is a NaN.</summary>
     private static uint MultiplyInfinity(uint left, uint right, ref Decimal32Status status)
     {
         var leftInfinite = Decimal32Encoding.IsInfinity(left);
@@ -359,7 +407,7 @@ internal static class Decimal32Arithmetic
 
         if ((leftInfinite && Decimal32Encoding.IsZero(right)) || (rightInfinite && Decimal32Encoding.IsZero(left)))
         {
-            // An infinity times a zero has no product.
+            // An infinity times zero is invalid.
             return Invalid(ref status);
         }
 
@@ -368,6 +416,13 @@ internal static class Decimal32Arithmetic
 
     // Fused multiply-add.
 
+    /// <summary>Multiplies two values and adds a third, with a single rounding.</summary>
+    /// <param name="left">The encoded first multiplicand.</param>
+    /// <param name="right">The encoded second multiplicand.</param>
+    /// <param name="addend">The encoded value added to the product.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded value of <c>left * right + addend</c>, rounded once to the format.</returns>
     public static uint FusedMultiplyAdd(uint left, uint right, uint addend, Decimal32Rounding rounding,
         ref Decimal32Status status)
     {
@@ -386,8 +441,8 @@ internal static class Decimal32Arithmetic
         var product = (ulong)leftCoefficient * rightCoefficient;
         if (product <= Decimal32Encoding.MaxCoefficient)
         {
-            // A product within the format is an ordinary addition, which pads it out to
-            // the precision when the addend lies below it.
+            // A product that fits in the format uses the ordinary addition, which pads it to
+            // the precision when the addend is below it.
             return AddFinite(productNegative, product, productExponent, addendNegative,
                 addendCoefficient, addendExponent, rounding, ref status);
         }
@@ -417,7 +472,7 @@ internal static class Decimal32Arithmetic
         }
 
         // An invalid multiplication is reported even when the addend is a quiet NaN, so the
-        // product is settled before the addend's NaN is looked at.
+        // product is checked before the addend's NaN.
         if (!Decimal32Encoding.IsNaN(left) && !Decimal32Encoding.IsNaN(right)
             && (Decimal32Encoding.IsInfinity(left) || Decimal32Encoding.IsInfinity(right)))
         {
@@ -429,8 +484,8 @@ internal static class Decimal32Arithmetic
 
             if (Decimal32Encoding.IsInfinity(product))
             {
-                // An infinite product still has to meet the addend, which can be the other
-                // infinity and make the addition invalid in its own right.
+                // An infinite product is still added to the addend. If the addend is an
+                // infinity of the opposite sign, the addition is invalid.
                 return AddInfinity(product, addend, ref status);
             }
 
@@ -452,12 +507,21 @@ internal static class Decimal32Arithmetic
             return Decimal32Encoding.Quiet(addend);
         }
 
-        // Everything else is finite, so the addend is the infinity.
+        // The multiplicands are finite, so the addend is the infinity.
         return Decimal32Encoding.Infinity(Decimal32Encoding.IsNegative(addend));
     }
 
     // Division and its relatives.
 
+    /// <summary>
+    /// Divides two values. An exact quotient takes the exponent closest to the difference of
+    /// the operands' exponents.
+    /// </summary>
+    /// <param name="left">The encoded dividend.</param>
+    /// <param name="right">The encoded divisor.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded quotient, rounded to the format.</returns>
     public static uint Divide(uint left, uint right, Decimal32Rounding rounding, ref Decimal32Status status)
     {
         if (Decimal32Encoding.IsSpecial(left) || Decimal32Encoding.IsSpecial(right))
@@ -491,11 +555,11 @@ internal static class Decimal32Arithmetic
     }
 
     /// <summary>
-    /// The quotient to seven or eight digits, with the remainder deciding the residue. The
-    /// dividend is scaled by ten to <c>7 + divisor digits - dividend digits</c>, which puts
-    /// the quotient between 10^6 and 10^8: at the precision, when the remainder alone
-    /// decides the rounding, or one digit over, which the finalizer drops with the
-    /// remainder's residue under it. The scaled dividend has at most fourteen digits.
+    /// Computes the quotient to 7 or 8 digits, and uses the remainder to set the residue.
+    /// The dividend is scaled by 10 to the power <c>7 + divisor digits - dividend digits</c>,
+    /// which puts the quotient between 10^6 and 10^8. With 7 digits, the remainder alone
+    /// decides the rounding. With 8 digits, the finalizer drops the extra digit and uses the
+    /// remainder's residue below it. The scaled dividend has at most 14 digits.
     /// </summary>
     private static uint DivideFinite(bool negative, ulong dividend, ulong divisor, int idealExponent,
         Decimal32Rounding rounding, ref Decimal32Status status)
@@ -510,13 +574,14 @@ internal static class Decimal32Arithmetic
 
         if (remainder == 0)
         {
-            // Exact, so the specification wants the exponent nearest the ideal: give back
-            // the trailing zeros the scaling introduced, and no more.
+            // The quotient is exact, so the specification requires the exponent closest to
+            // the ideal. Remove the trailing zeros the scaling added, and no more.
             Decimal32Shaping.StripTrailingZeros(ref quotient, ref exponent, idealExponent);
             return Decimal32Finalizer.Finalize(negative, quotient, exponent, Decimal32Residue.Exact, rounding, ref status);
         }
 
-        // Twice the remainder against the divisor says which side of half it falls on.
+        // Comparing twice the remainder with the divisor shows whether the remainder is
+        // below, at, or above half.
         var doubled = remainder * 2;
         var residue = doubled < divisor
             ? Decimal32Residue.BelowHalf
@@ -525,7 +590,12 @@ internal static class Decimal32Arithmetic
         return Decimal32Finalizer.Finalize(negative, quotient, exponent, residue, rounding, ref status);
     }
 
-    /// <summary>The integer part of the quotient, with a zero exponent.</summary>
+    /// <summary>The integer part of the quotient, with exponent zero.</summary>
+    /// <param name="left">The encoded dividend.</param>
+    /// <param name="right">The encoded divisor.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded integer quotient, or a quiet NaN if it does not fit in the precision.</returns>
     public static uint DivideInteger(uint left, uint right, Decimal32Rounding rounding, ref Decimal32Status status)
     {
         if (Decimal32Encoding.IsSpecial(left) || Decimal32Encoding.IsSpecial(right))
@@ -554,7 +624,7 @@ internal static class Decimal32Arithmetic
             return Decimal32Encoding.Zero(negative, 0);
         }
 
-        if (!TryIntegerDivide(leftCoefficient, leftExponent, rightCoefficient, rightExponent,
+        if (!IntegerDivide(leftCoefficient, leftExponent, rightCoefficient, rightExponent,
             out var quotient, out _, out _, out _))
         {
             status |= Decimal32Status.DivisionImpossible;
@@ -565,10 +635,16 @@ internal static class Decimal32Arithmetic
     }
 
     /// <summary>
-    /// What is left after taking out the integer quotient, which the division leaves behind
-    /// exactly. The near form takes the quotient to the nearest integer instead, so the
-    /// remainder can come out the other side of zero.
+    /// The exact remainder after dividing by the integer quotient. The near form rounds the
+    /// quotient to the nearest integer instead of truncating it, so the remainder can have
+    /// the opposite sign.
     /// </summary>
+    /// <param name="left">The encoded dividend.</param>
+    /// <param name="right">The encoded divisor.</param>
+    /// <param name="near">Whether the quotient is rounded to the nearest integer instead of truncated.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded remainder, or a quiet NaN if the integer quotient does not fit in the precision.</returns>
     public static uint Remainder(uint left, uint right, bool near, Decimal32Rounding rounding, ref Decimal32Status status)
     {
         var kind = near ? Decimal32DivisionKind.RemainderNear : Decimal32DivisionKind.Remainder;
@@ -595,12 +671,12 @@ internal static class Decimal32Arithmetic
 
         if (leftCoefficient == 0)
         {
-            // Nothing is taken out of a zero, so the dividend is what is left: its own
-            // sign, at the lower of the two exponents.
+            // A zero dividend is its own remainder. It keeps its sign and takes the lower of
+            // the two exponents.
             return Decimal32Finalizer.Zero(negative, Math.Min(leftExponent, rightExponent), ref status);
         }
 
-        if (!TryIntegerDivide(leftCoefficient, leftExponent, rightCoefficient, rightExponent,
+        if (!IntegerDivide(leftCoefficient, leftExponent, rightCoefficient, rightExponent,
             out var quotient, out var remainder, out var remainderExponent, out var scaledDivisor))
         {
             status |= Decimal32Status.DivisionImpossible;
@@ -609,10 +685,10 @@ internal static class Decimal32Arithmetic
 
         if (near && scaledDivisor != 0)
         {
-            // The nearest integer quotient may be one higher, in which case the remainder is
-            // measured from that one and changes sign. A tie goes to the even quotient. The
-            // remainder is set against what is left of the divisor rather than doubled,
-            // since a divisor lifted to nineteen digits leaves no room to double.
+            // The nearest integer quotient can be one higher. Then the remainder is measured
+            // from that quotient and changes sign. A tie goes to the even quotient. The
+            // remainder is compared with (divisor - remainder) instead of being doubled,
+            // because a divisor scaled to 19 digits leaves no room to double.
             var other = scaledDivisor - remainder;
             if (remainder > other || (remainder == other && (quotient & 1) != 0))
             {
@@ -637,13 +713,14 @@ internal static class Decimal32Arithmetic
     }
 
     /// <summary>
-    /// The integer quotient of two finite non-zero values and what it leaves, exactly. The
-    /// quotient has to fit the precision; one that would not makes the division impossible.
-    /// The remainder comes back at the lower of the two exponents, with the divisor scaled
-    /// to that exponent beside it when it fits a word, and zero when it does not -- in which
-    /// case the remainder is the whole dividend and is below half of it.
+    /// The exact integer quotient and remainder of two finite non-zero values. The quotient
+    /// must fit in the precision. If it does not, the method returns false and the division
+    /// is impossible. The remainder is returned at the lower of the two exponents.
+    /// <paramref name="scaledDivisor"/> is the divisor scaled to that exponent when it fits
+    /// in a word. Otherwise it is zero, and the remainder is the whole dividend, which is
+    /// below half the divisor.
     /// </summary>
-    private static bool TryIntegerDivide(ulong dividend, int dividendExponent, ulong divisor, int divisorExponent,
+    private static bool IntegerDivide(ulong dividend, int dividendExponent, ulong divisor, int divisorExponent,
         out ulong quotient, out ulong remainder, out int remainderExponent, out ulong scaledDivisor)
     {
         var dividendDigits = Decimal32Tables.CountDigits(dividend);
@@ -655,9 +732,9 @@ internal static class Decimal32Arithmetic
             remainderExponent = divisorExponent;
             scaledDivisor = divisor;
 
-            // The dividend scaled to the divisor's exponent has this many digits; past
-            // seven more than the divisor the quotient cannot fit. Within that it has at
-            // most fourteen digits, which the divider takes whole.
+            // The dividend scaled to the divisor's exponent has this many digits. If it has
+            // 8 or more digits than the divisor, the quotient cannot fit. Otherwise it has at
+            // most 14 digits, which the divider handles in one step.
             var wideDigits = dividendDigits + scale;
             if (wideDigits - divisorDigits >= QuotientDigits)
             {
@@ -676,8 +753,8 @@ internal static class Decimal32Arithmetic
 
         if (divisorDigits + lift > WideDigits)
         {
-            // The divisor lifted to the dividend's exponent is past any word, so it is past
-            // the dividend too: nothing divides out.
+            // The divisor scaled to the dividend's exponent does not fit in a word, so it is
+            // larger than the dividend, and the quotient is zero.
             quotient = 0;
             remainder = dividend;
             scaledDivisor = 0;
@@ -692,13 +769,13 @@ internal static class Decimal32Arithmetic
             return true;
         }
 
-        // Both are below the dividend's seven digits here, so the divider takes them.
+        // Both values have at most 7 digits here, so the divider handles them.
         quotient = Decimal32Divider.Divide(dividend, scaledDivisor, out remainder);
         return true;
     }
 
     /// <summary>
-    /// The infinities and NaNs, for all four operations built on division.
+    /// Handles infinities and NaNs for the four division operations.
     /// </summary>
     private static uint DivideSpecial(uint left, uint right, Decimal32DivisionKind kind, ref Decimal32Status status)
     {
@@ -714,31 +791,31 @@ internal static class Decimal32Arithmetic
         {
             if (Decimal32Encoding.IsInfinity(right) || isRemainder)
             {
-                // One infinity over another has no quotient, and there is nothing left over
-                // from an infinity.
+                // An infinity divided by an infinity is invalid, and so is the remainder of
+                // an infinity.
                 return Invalid(ref status);
             }
 
-            // An infinity over anything finite is infinite, even over a zero.
+            // An infinity divided by a finite value is infinite, even when dividing by zero.
             return Decimal32Encoding.Infinity(negative);
         }
 
         // The divisor is the infinity.
         if (isRemainder)
         {
-            // Nothing has been taken out, so the whole dividend is left over.
+            // The quotient is zero, so the remainder is the whole dividend.
             return Decimal32Encoding.Canonical(left);
         }
 
         if (kind == Decimal32DivisionKind.DivideInteger)
         {
-            // No whole copies of an infinity come out, and an integer result sits at an
-            // exponent of zero rather than being clamped down.
+            // The integer quotient is zero. An integer result has exponent zero and is not
+            // clamped.
             return Decimal32Encoding.Zero(negative, 0);
         }
 
-        // A finite over an infinity is a zero whose exponent wants to be unboundedly small;
-        // it comes to rest at the smallest the format holds, which is a clamp.
+        // A finite value divided by an infinity is a zero with an unbounded negative
+        // exponent. It is clamped to the smallest exponent the format holds.
         status |= Decimal32Status.Clamped;
         return Decimal32Encoding.Zero(negative, Decimal32Encoding.MinQuantumExponent);
     }
@@ -746,10 +823,16 @@ internal static class Decimal32Arithmetic
     // Comparison.
 
     /// <summary>
-    /// Compares two values numerically, giving -1, 0, 1, or <see cref="int.MinValue"/> with
-    /// a NaN in <paramref name="nan"/> when the two are unordered. The two zeros are equal
-    /// here, unlike under the total order.
+    /// Compares two values numerically. Returns -1, 0, or 1, or <see cref="int.MinValue"/>
+    /// when the values are unordered, with the resulting NaN in <paramref name="nan"/>.
+    /// Positive and negative zero are equal here, unlike in the total order.
     /// </summary>
+    /// <param name="left">The encoded left operand.</param>
+    /// <param name="right">The encoded right operand.</param>
+    /// <param name="signaling">Whether a quiet NaN operand also raises InvalidOperation, not only a signaling one.</param>
+    /// <param name="status">Receives the conditions the comparison raises.</param>
+    /// <param name="nan">Receives the quiet NaN result when the values are unordered, and zero otherwise.</param>
+    /// <returns>-1, 0, or 1 as the left value is less than, equal to, or greater than the right, or <see cref="int.MinValue"/> when they are unordered.</returns>
     public static int Compare(uint left, uint right, bool signaling, ref Decimal32Status status, out uint nan)
     {
         nan = 0;
@@ -758,8 +841,8 @@ internal static class Decimal32Arithmetic
         {
             if (Decimal32Encoding.IsNaN(left) || Decimal32Encoding.IsNaN(right))
             {
-                // The quiet comparison lets a quiet NaN through without a condition; the
-                // signaling one reports every NaN.
+                // The quiet comparison reports only a signaling NaN. The signaling comparison
+                // reports every NaN.
                 if (signaling)
                 {
                     status |= Decimal32Status.InvalidOperation;
@@ -780,9 +863,13 @@ internal static class Decimal32Arithmetic
     }
 
     /// <summary>
-    /// Orders values where at least one is infinite and neither is a NaN. An infinity is
-    /// beyond every finite value on its own side, and two of the same sign are equal.
+    /// Compares two values when at least one is infinite and neither is a NaN. An infinity
+    /// is beyond every finite value of its sign, and two infinities of the same sign are
+    /// equal.
     /// </summary>
+    /// <param name="left">The encoded left operand.</param>
+    /// <param name="right">The encoded right operand.</param>
+    /// <returns>-1, 0, or 1 as the left value is less than, equal to, or greater than the right.</returns>
     public static int CompareInfinity(uint left, uint right)
     {
         if (Decimal32Encoding.IsInfinity(left) && Decimal32Encoding.IsInfinity(right))
@@ -803,6 +890,17 @@ internal static class Decimal32Arithmetic
         return Decimal32Encoding.IsNegative(right) ? 1 : -1;
     }
 
+    /// <summary>
+    /// Compares two finite values numerically. Every zero is equal to every other zero,
+    /// whatever its sign or exponent.
+    /// </summary>
+    /// <param name="leftNegative">Whether the left operand is negative.</param>
+    /// <param name="leftCoefficient">The left operand's coefficient.</param>
+    /// <param name="leftExponent">The left operand's exponent.</param>
+    /// <param name="rightNegative">Whether the right operand is negative.</param>
+    /// <param name="rightCoefficient">The right operand's coefficient.</param>
+    /// <param name="rightExponent">The right operand's exponent.</param>
+    /// <returns>-1, 0, or 1 as the left value is less than, equal to, or greater than the right.</returns>
     public static int CompareFinite(bool leftNegative, ulong leftCoefficient, int leftExponent,
         bool rightNegative, ulong rightCoefficient, int rightExponent)
     {
@@ -831,10 +929,15 @@ internal static class Decimal32Arithmetic
     }
 
     /// <summary>
-    /// Orders two non-zero coefficients by value, ignoring both signs. Where the leading
-    /// digits sit decides it unless they sit in the same place; then the coefficients are
-    /// lined up, which stays inside seven digits because their leading digits agree.
+    /// Compares the magnitudes of two non-zero values. The positions of the leading digits
+    /// decide the order unless they are equal. Then the coefficients are aligned, which
+    /// stays within 7 digits because their leading digits are in the same position.
     /// </summary>
+    /// <param name="leftCoefficient">The left operand's coefficient.</param>
+    /// <param name="leftExponent">The left operand's exponent.</param>
+    /// <param name="rightCoefficient">The right operand's coefficient.</param>
+    /// <param name="rightExponent">The right operand's exponent.</param>
+    /// <returns>-1, 0, or 1 as the left magnitude is less than, equal to, or greater than the right.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int CompareMagnitude(ulong leftCoefficient, int leftExponent, ulong rightCoefficient,
         int rightExponent)

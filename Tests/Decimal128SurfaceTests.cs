@@ -1,15 +1,16 @@
 // Copyright (c) JakeSays
 // SPDX-License-Identifier: MIT
 
+using System.Buffers.Binary;
 using System.Numerics;
 using Decimals.Internal;
 
 namespace Decimals.Tests;
 
 /// <summary>
-/// The members of <see cref="Decimal128"/> a .NET caller reaches for by name: rounding,
-/// selection, sign and clamp, the constants, the generic math hooks, and the conversions
-/// that have to refuse a value.
+/// Tests the <see cref="Decimal128"/> members that .NET code calls by name: rounding, min
+/// and max, sign and clamp, the constants, the generic math members, and the conversions
+/// that must reject a value.
 /// </summary>
 public class Decimal128SurfaceTests
 {
@@ -40,7 +41,8 @@ public class Decimal128SurfaceTests
         Assert.Equal("2.35", Decimal128.Round(value, 2, MidpointRounding.AwayFromZero).ToString());
         Assert.Equal("2", Decimal128.Round(value, MidpointRounding.ToZero).ToString());
 
-        // Asking for more places than the value carries leaves it alone, quantum and all.
+        // Asking for more decimal places than the value has returns it unchanged,
+        // including its exponent.
         Assert.Equal("2.345", Decimal128.Round(value, 8).ToString());
 
         Assert.True(Decimal128.IsNaN(Decimal128.Round(Decimal128.NaN, 2)));
@@ -92,7 +94,7 @@ public class Decimal128SurfaceTests
         Assert.Equal(Decimal128.Parse("-3"), Decimal128.MaxMagnitudeNumber(Decimal128.Parse("-3"), Decimal128.Parse("2")));
         Assert.Equal(Decimal128.Parse("2"), Decimal128.MinMagnitudeNumber(Decimal128.Parse("-3"), Decimal128.Parse("2")));
 
-        // A signaling NaN is invalid under every reading and comes back quiet.
+        // A signaling NaN is invalid in both definitions of max, and the result is quiet.
         var signaling = Decimal128.Parse("sNaN5");
         Assert.Equal("NaN5", Decimal128.Max(signaling, one).ToString());
     }
@@ -216,7 +218,7 @@ public class Decimal128SurfaceTests
         Assert.True(Decimal128.IsInfinity(garbage));
         Assert.Equal(Decimal128.PositiveInfinity.ToBits(), Decimal128.Canonical(garbage).ToBits());
 
-        // A coefficient of 10^34, one past the largest, in the plain form.
+        // The short form with coefficient 10^34, one more than the largest coefficient.
         var wideCoefficient = Decimal128.FromBits(new UInt128((6176UL << 49) | 0x0001ED09BEAD87C0, 0x378D8E6400000000));
         Assert.False(Decimal128.IsCanonical(wideCoefficient));
         Assert.True(Decimal128.IsZero(wideCoefficient));
@@ -226,7 +228,8 @@ public class Decimal128SurfaceTests
         Assert.True(Decimal128.IsCanonical(largest));
         Assert.Equal("9999999999999999999999999999999999", largest.ToString());
 
-        // The long form always carries a coefficient past the largest, so it is a zero.
+        // Every long-form coefficient is larger than the largest valid one, so a long-form
+        // value is always zero.
         var longForm = Decimal128.FromBits(new UInt128(0x6000000000000000 | (6176UL << 47), 1));
         Assert.False(Decimal128.IsCanonical(longForm));
         Assert.True(Decimal128.IsZero(longForm));
@@ -240,8 +243,8 @@ public class Decimal128SurfaceTests
     [Fact]
     public void ConditionsDoNotLeakBetweenOperations()
     {
-        // A subnormal result underflows only when it is itself inexact; an earlier
-        // operation's inexactness in the same context must not make it so.
+        // A subnormal result raises Underflow only if the result itself is inexact. Inexact
+        // from an earlier operation in the same context must not cause Underflow.
         var context = new Decimal128Context();
         Decimal128.Divide(Decimal128.One, Decimal128.Parse("3"), ref context);
         Assert.True(context.HasRaised(Decimal128Status.Inexact));
@@ -253,9 +256,9 @@ public class Decimal128SurfaceTests
     }
 
     /// <summary>
-    /// A base of zero or infinity makes the divisor infinite, so the quotient is a zero at
-    /// an exponent far below the format; it has to come back clamped rather than packed as
-    /// whatever bits that exponent makes.
+    /// A base of zero or infinity makes the divisor infinite. The quotient is then a zero
+    /// with an exponent far below the format's range. It must be clamped to the smallest
+    /// exponent, not packed with an out-of-range exponent.
     /// </summary>
     [Fact]
     public void LogarithmInADegenerateBaseIsAClampedZero()
@@ -266,8 +269,8 @@ public class Decimal128SurfaceTests
 
         Assert.Equal("0E-6176", Decimal128.Log(Decimal128.Parse("8"), Decimal128.PositiveInfinity).ToString());
 
-        // A base of one makes the divisor zero, which is a division by zero rather than an
-        // invalid operation: the quotient is an infinity.
+        // A base of one makes the divisor zero. That is a division by zero, not an invalid
+        // operation, so the result is an infinity.
         var byOne = new Decimal128Context();
         Assert.True(Decimal128.IsPositiveInfinity(Decimal128.Log(Decimal128.Parse("8"), Decimal128.One, ref byOne)));
         Assert.True(byOne.HasRaised(Decimal128Status.DivisionByZero));
@@ -276,8 +279,8 @@ public class Decimal128SurfaceTests
     }
 
     /// <summary>
-    /// The integer overload of ScaleB applies the same limit as the operand form: a shift
-    /// no operand could express is invalid, not an overflow.
+    /// The integer overload of ScaleB has the same limit as the decimal overload. A scale
+    /// too large to be a valid operand is an invalid operation, not an overflow.
     /// </summary>
     [Fact]
     public void ScaleByAnIntegerHonorsTheOperandLimit()
@@ -311,10 +314,9 @@ public class Decimal128SurfaceTests
     }
 
     /// <summary>
-    /// Every path of the wide arithmetic on a few hand-picked operands, each checked
-    /// against a value worked out by hand. The square of thirty-four nines is
-    /// 10^68 - 2*10^34 + 1, and two to the sixty-fourth squared is two to the hundred
-    /// and twenty-eighth, whose thirty-nine digits round at the thirty-fifth.
+    /// Covers each path of the wide arithmetic with operands whose results were worked out
+    /// by hand. The square of 34 nines is 10^68 - 2*10^34 + 1. The square of 2^64 is 2^128,
+    /// which has 39 digits and rounds at the 35th.
     /// </summary>
     [Theory]
     [InlineData("9999999999999999999999999999999999", "9999999999999999999999999999999999", "9.999999999999999999999999999999998E+67")]
@@ -329,8 +331,8 @@ public class Decimal128SurfaceTests
     }
 
     /// <summary>
-    /// An inexact quotient carries thirty-four digits at whatever exponent that takes; an
-    /// exact one gives back the trailing zeros toward the ideal exponent.
+    /// An inexact quotient has 34 digits, at whatever exponent that needs. An exact
+    /// quotient drops trailing zeros until it reaches the ideal exponent.
     /// </summary>
     [Theory]
     [InlineData("1", "3", "0.3333333333333333333333333333333333")]
@@ -347,8 +349,8 @@ public class Decimal128SurfaceTests
     }
 
     /// <summary>
-    /// An exact root is shortened toward half the operand's exponent; an inexact one keeps
-    /// thirty-four digits at the exponent the scaling left.
+    /// An exact root drops trailing zeros until its exponent reaches half the operand's
+    /// exponent. An inexact root keeps 34 digits.
     /// </summary>
     [Theory]
     [InlineData("2", "1.414213562373095048801688724209698")]
@@ -366,10 +368,10 @@ public class Decimal128SurfaceTests
     }
 
     /// <summary>
-    /// Roots that lie just below a whole number of units in the last place, such as
-    /// <c>...979.99999...</c>. These once came out one unit high in every rounding mode,
-    /// because the Newton estimate landed two above the integer root. The cases are from
-    /// the Sayed-Ahmed and Fahmy decimal128 square-root vectors.
+    /// Roots that lie just below a whole number in the last digit, such as
+    /// <c>...979.99999...</c>. For these, the Newton estimate can land 2 above the integer
+    /// root, which once made the result 1 too high in every rounding mode. The cases come
+    /// from the Sayed-Ahmed and Fahmy decimal128 square-root vectors.
     /// </summary>
     [Theory]
     [InlineData("1209999999999999999999999999999956E4747", Decimal128Rounding.Down, "1099999999999999999999999999999979E2357")]
@@ -388,10 +390,9 @@ public class Decimal128SurfaceTests
     }
 
     /// <summary>
-    /// The product is kept exact until the addend has been taken in: the square of
-    /// thirty-four nines less its own rounded value leaves the one that rounding took
-    /// away, and two to the hundred and twenty-eighth less its rounded value leaves the
-    /// low digits the rounding dropped.
+    /// The product must stay exact until the addend is added. Subtracting the rounded
+    /// square of 34 nines from the exact square leaves exactly the part that rounding
+    /// removed. The same holds for 2^128 and the low digits its rounding drops.
     /// </summary>
     [Theory]
     [InlineData("9999999999999999999999999999999999", "9999999999999999999999999999999999", "-9.999999999999999999999999999999998E+67", "1")]
@@ -407,8 +408,8 @@ public class Decimal128SurfaceTests
 
     private static UInt128 BinaryPrimitivesUInt128(ReadOnlySpan<byte> bigEndian)
     {
-        var high = System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(bigEndian);
-        var low = System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(bigEndian[8..]);
+        var high = BinaryPrimitives.ReadUInt64BigEndian(bigEndian);
+        var low = BinaryPrimitives.ReadUInt64BigEndian(bigEndian[8..]);
         return new UInt128(high, low);
     }
 

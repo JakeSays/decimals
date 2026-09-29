@@ -4,26 +4,35 @@
 namespace Decimals.Internal;
 
 /// <summary>
-/// The fused multiply-add of a product too wide for the format, which at this width still
-/// fits the word: two coefficients of at most seven digits multiply to at most fourteen.
+/// The fused multiply-add for a product that is too wide for the format. At this width the
+/// product still fits in a 64-bit word: two 7-digit coefficients multiply to at most 14
+/// digits.
 /// </summary>
 /// <remarks>
-/// The product stays exact and only the addend is folded, or both stay exact in the word
-/// when the addend scaled to the product's exponent fits beside it, or the addend is
-/// widened and the product folded under it when the addend sits far above. Either way one
-/// inexact quantity at most reaches the rounding, which is what a residue can carry
-/// correctly. The product is at least eight digits here, so a folded addend, which has at
-/// most six, can never cancel it.
+/// There are three cases. The product stays exact and only the addend is folded. Or both
+/// stay exact in one word, when the addend scaled to the product's exponent fits. Or the
+/// addend is far above, so it is widened and the product is folded below it. In every
+/// case, at most one inexact value reaches the rounding, which is what a residue can
+/// handle correctly. The product has at least 8 digits here, and a folded addend has at
+/// most 6, so the addend can never cancel the product.
 /// </remarks>
 internal static class Decimal32Product
 {
     private const int WideDigits = Decimal32Tables.MaxPower;
 
     /// <summary>
-    /// Adds an addend to a product of eight to fourteen digits, rounding once. Which of the
-    /// two operands gets folded, if either, depends on where the addend sits against the
-    /// product.
+    /// Adds an addend to a product of 8 to 14 digits, with a single rounding. Which operand
+    /// is folded, if either, depends on the addend's position relative to the product.
     /// </summary>
+    /// <param name="productNegative">Whether the product is negative.</param>
+    /// <param name="product">The exact product, of 8 to 14 digits.</param>
+    /// <param name="productExponent">The product's exponent.</param>
+    /// <param name="addendNegative">Whether the addend is negative.</param>
+    /// <param name="addend">The addend's coefficient.</param>
+    /// <param name="addendExponent">The addend's exponent.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded sum, rounded once.</returns>
     public static uint FusedAdd(bool productNegative, ulong product, int productExponent, bool addendNegative,
         ulong addend, int addendExponent, Decimal32Rounding rounding, ref Decimal32Status status)
     {
@@ -53,15 +62,15 @@ internal static class Decimal32Product
     }
 
     /// <summary>
-    /// The addend lies below the product's last digit: the addend is folded to the
-    /// product's exponent and its discarded digits become the residue. The product is at
-    /// least eight digits and the folded addend at most six, so nothing cancels.
+    /// The addend is below the product's last digit. The addend is folded to the product's
+    /// exponent, and its discarded digits become the residue. The product has at least 8
+    /// digits and the folded addend at most 6, so nothing cancels.
     /// </summary>
     private static uint AddBelow(bool productNegative, ulong product, int exponent, bool addendNegative,
         ulong addend, int drop, Decimal32Rounding rounding, ref Decimal32Status status)
     {
-        // The exact sum reaches down to the addend's last digit, below a product already
-        // wider than the format, so digits are discarded whatever they hold.
+        // The exact sum extends down to the addend's last digit, below a product that is
+        // already wider than the format. So digits are discarded, whatever their values.
         status |= Decimal32Status.Rounded;
 
         ulong folded;
@@ -83,8 +92,8 @@ internal static class Decimal32Product
                 ref status);
         }
 
-        // Subtracting an inexact operand: the whole units come off, one more unit comes off
-        // for the fraction, and the fraction's residue flips to what is left of that unit.
+        // Subtracting an inexact operand: subtract the whole units, then one more unit for
+        // the fraction. The residue is flipped to describe what remains of that unit.
         if (residue != Decimal32Residue.Exact)
         {
             folded++;
@@ -95,8 +104,8 @@ internal static class Decimal32Product
     }
 
     /// <summary>
-    /// The addend, scaled to the product's exponent, fits the word beside the product: the
-    /// sum or difference is formed exactly and rounded once.
+    /// The addend, scaled to the product's exponent, fits in the same word as the product.
+    /// The sum or difference is computed exactly and rounded once.
     /// </summary>
     private static uint AddExact(bool productNegative, ulong product, int exponent, bool addendNegative,
         ulong addend, int shift, Decimal32Rounding rounding, ref Decimal32Status status)
@@ -111,8 +120,8 @@ internal static class Decimal32Product
 
         if (product == scaled)
         {
-            // Opposite signs canceling exactly gives a positive zero, except when the
-            // rounding runs toward negative infinity.
+            // Opposite signs that cancel exactly give positive zero, except when rounding
+            // toward negative infinity.
             return Decimal32Finalizer.Zero(rounding == Decimal32Rounding.Floor, exponent, ref status);
         }
 
@@ -127,10 +136,9 @@ internal static class Decimal32Product
     }
 
     /// <summary>
-    /// The addend's last digit sits far enough above the product that, once the addend is
-    /// widened to nineteen digits, the product folded under it has at most thirteen:
-    /// nothing can cancel down into the fold, so the product's discarded digits are the
-    /// residue.
+    /// The addend's last digit is far enough above the product that, after the addend is
+    /// widened to 19 digits, the product folded below it has at most 13 digits. Nothing can
+    /// cancel into the folded part, so the product's discarded digits are the residue.
     /// </summary>
     private static uint AddAbove(bool productNegative, ulong product, int productExponent, bool addendNegative,
         ulong addend, int addendDigits, int addendExponent, Decimal32Rounding rounding,

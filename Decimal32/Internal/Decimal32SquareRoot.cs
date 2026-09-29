@@ -4,30 +4,35 @@
 namespace Decimals.Internal;
 
 /// <summary>
-/// The square root, correctly rounded, on a machine word.
+/// The correctly rounded square root, computed in a 64-bit word.
 /// </summary>
 /// <remarks>
 /// <para>
-/// The coefficient is scaled by an even power of ten until it has fifteen or sixteen
-/// digits, whose integer root has eight: seven to keep and one to round on. Whether the
-/// root squares back to the radicand says whether anything lies below that digit. Halving
-/// the exponent is what makes the root's, which is why the scaling keeps it even.
+/// The coefficient is scaled by an even power of ten to 15 or 16 digits. Its integer root
+/// then has 8 digits: 7 to keep and one to round on. If the root squared equals the
+/// radicand, nothing lies below the round digit. The root's exponent is half the operand's
+/// exponent, which is why the scale must be even.
 /// </para>
 /// <para>
-/// The radicand is below 10^16, so it goes to a double within a unit, and the double's
-/// root is within one of the integer root; comparing exact squares settles it. Every
-/// square fits the word.
+/// The radicand is below 10^16, so its conversion to double is off by at most 1, and the
+/// double's square root is within 1 of the integer root. Comparing exact squares settles
+/// it. Every square fits in a 64-bit word.
 /// </para>
 /// <para>
-/// An exact root is shortened toward the exponent the specification prefers, which is half
-/// the operand's, giving back the trailing zeros the scaling introduced.
+/// An exact root drops trailing zeros until its exponent reaches the preferred exponent,
+/// which is half the operand's. This removes the zeros that the scaling added.
 /// </para>
 /// </remarks>
 internal static class Decimal32SquareRoot
 {
-    /// <summary>Digits the radicand is scaled to, or one fewer when that keeps the exponent even.</summary>
+    /// <summary>The number of digits the radicand is scaled to, or one fewer to keep the exponent even.</summary>
     private const int RadicandDigits = 16;
 
+    /// <summary>The square root, correctly rounded.</summary>
+    /// <param name="value">The encoded operand.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded root, or a quiet NaN if the operand is negative and not zero.</returns>
     public static uint SquareRoot(uint value, Decimal32Rounding rounding, ref Decimal32Status status)
     {
         if (Decimal32Encoding.IsSpecial(value))
@@ -61,7 +66,7 @@ internal static class Decimal32SquareRoot
             return Decimal32Arithmetic.Invalid(ref status);
         }
 
-        // An odd exponent is made even by moving a digit into the coefficient.
+        // Make an odd exponent even by multiplying the coefficient by 10.
         var odd = exponent & 1;
         coefficient *= 1UL + (9UL * (ulong)odd);
         exponent -= odd;
@@ -79,8 +84,8 @@ internal static class Decimal32SquareRoot
             return Decimal32Finalizer.Finalize(false, root, rootExponent, Decimal32Residue.Exact, rounding, ref status);
         }
 
-        // Eight digits with something non-zero below them: the last digit is the round
-        // digit and the remainder is a sticky below it.
+        // 8 digits with a non-zero remainder below them. The last digit is the round digit,
+        // and the remainder acts as a sticky digit below it.
         var kept = root / 10;
         var roundDigit = root - (kept * 10);
         var residue = Decimal32Rounder.Combine(roundDigit, 5, Decimal32Residue.BelowHalf);
@@ -89,16 +94,16 @@ internal static class Decimal32SquareRoot
     }
 
     /// <summary>
-    /// The largest integer whose square does not exceed the radicand, which is below 10^16
-    /// and so has a root below 10^8.
+    /// The largest integer whose square does not exceed the radicand. The radicand is below
+    /// 10^16, so the root is below 10^8.
     /// </summary>
     private static ulong IntegerSquareRoot(ulong radicand, out bool exact)
     {
         var estimate = (ulong)(long)Math.Sqrt((double)(long)radicand);
 
-        // The double's root is within one of the integer root: the radicand went to the
-        // double within a unit, and the root of a value below 10^16 changes by less than
-        // that for a unit of radicand.
+        // The double's root is within 1 of the integer root. The radicand converts to double
+        // with an error of at most 1, and for values below 10^16 that changes the root by
+        // much less than 1.
         var square = estimate * estimate;
         if (square > radicand)
         {

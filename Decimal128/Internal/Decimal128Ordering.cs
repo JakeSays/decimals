@@ -4,12 +4,14 @@
 namespace Decimals.Internal;
 
 /// <summary>
-/// Reading a value's standing rather than computing with it: what class it is, whether it
-/// is subnormal, where it falls in the total order, and which of two values a selection
-/// picks.
+/// Classifies and orders values without computing with them: the class, whether a value
+/// is subnormal, the total order, min and max selection, and the hash.
 /// </summary>
 internal static class Decimal128Ordering
 {
+    /// <summary>The specification's class of a value.</summary>
+    /// <param name="bits">The encoded value.</param>
+    /// <returns>The class: a NaN kind, or an infinity, normal, subnormal, or zero of either sign.</returns>
     public static Decimal128Class Classify(Decimal128Integer bits)
     {
         var negative = Decimal128Encoding.IsNegative(bits);
@@ -44,15 +46,20 @@ internal static class Decimal128Ordering
     }
 
     /// <summary>
-    /// Whether a non-zero finite value's leading digit sits below where the normal range
-    /// starts.
+    /// True if a non-zero finite value's adjusted exponent is below the normal range.
     /// </summary>
+    /// <param name="coefficient">The value's coefficient.</param>
+    /// <param name="exponent">The value's quantum exponent.</param>
+    /// <returns>True if the coefficient is not zero and the adjusted exponent is below <see cref="Decimal128Encoding.MinExponent"/>.</returns>
     public static bool IsSubnormal(Decimal128Integer coefficient, int exponent)
     {
         return !coefficient.IsZero
             && exponent + Decimal128Tables.CountDigits(coefficient) - 1 < Decimal128Encoding.MinExponent;
     }
 
+    /// <summary>True if the value is finite, non-zero, and below the normal range.</summary>
+    /// <param name="bits">The encoded value.</param>
+    /// <returns>True if the value is subnormal.</returns>
     public static bool IsSubnormal(Decimal128Integer bits)
     {
         if (Decimal128Encoding.IsSpecial(bits))
@@ -65,11 +72,14 @@ internal static class Decimal128Ordering
     }
 
     /// <summary>
-    /// IEEE 754's total order, which the specification calls compare-total. Every value is
-    /// ordered against every other, negative zero sits below positive zero, NaNs sort
-    /// outside the infinities by payload, and two members of one cohort are separated by
-    /// their exponents.
+    /// The IEEE 754 total order, which the specification calls compare-total. Every value
+    /// is ordered against every other. Negative zero is below positive zero. NaNs sort
+    /// outside the infinities, ordered by payload. Equal values with different exponents
+    /// are ordered by exponent.
     /// </summary>
+    /// <param name="left">The first encoded value.</param>
+    /// <param name="right">The second encoded value.</param>
+    /// <returns>A negative number if <paramref name="left"/> comes first, zero if the encodings are equal in the order, or a positive number if it comes second.</returns>
     public static int CompareTotal(Decimal128Integer left, Decimal128Integer right)
     {
         var leftNegative = Decimal128Encoding.IsNegative(left);
@@ -84,6 +94,10 @@ internal static class Decimal128Ordering
         return leftNegative ? -magnitude : magnitude;
     }
 
+    /// <summary>The IEEE 754 total order on the absolute values of two values.</summary>
+    /// <param name="left">The first encoded value.</param>
+    /// <param name="right">The second encoded value.</param>
+    /// <returns>A negative number if <paramref name="left"/> comes first, zero if they are equal in the order, or a positive number if it comes second.</returns>
     public static int CompareTotalMagnitude(Decimal128Integer left, Decimal128Integer right)
     {
         var leftRank = Rank(left);
@@ -95,13 +109,13 @@ internal static class Decimal128Ordering
 
         if (leftRank == 2)
         {
-            // Both infinite, and infinities of the same sign are indistinguishable.
+            // Both are infinite. Infinities of the same sign are equal.
             return 0;
         }
 
         if (leftRank > 2)
         {
-            // Both the same kind of NaN; the payload breaks the tie.
+            // Both are the same kind of NaN. The payload decides.
             return Decimal128Encoding.Payload(left).CompareTo(Decimal128Encoding.Payload(right));
         }
 
@@ -114,12 +128,17 @@ internal static class Decimal128Ordering
             return value;
         }
 
-        // Same value, so this is one cohort: the member with the larger exponent has the
-        // shorter coefficient, and counts as the larger.
+        // Equal values: the one with the larger exponent has the shorter coefficient and
+        // counts as larger.
         return leftExponent.CompareTo(rightExponent);
     }
 
-    /// <summary>Orders two finite values by magnitude alone, zeros included.</summary>
+    /// <summary>Compares two finite values by magnitude only, including zeros.</summary>
+    /// <param name="leftCoefficient">The first value's coefficient.</param>
+    /// <param name="leftExponent">The first value's quantum exponent.</param>
+    /// <param name="rightCoefficient">The second value's coefficient.</param>
+    /// <param name="rightExponent">The second value's quantum exponent.</param>
+    /// <returns>-1 if the first magnitude is smaller, 0 if they are equal, or 1 if it is larger.</returns>
     public static int CompareFiniteMagnitude(Decimal128Integer leftCoefficient, int leftExponent,
         Decimal128Integer rightCoefficient, int rightExponent)
     {
@@ -152,11 +171,17 @@ internal static class Decimal128Ordering
     }
 
     /// <summary>
-    /// The min and max family. A quiet NaN beside a number loses: these hand back the
-    /// number. Two values that compare equal still differ, so the total order settles which
-    /// member of the pair the caller gets -- negative zero loses to positive zero for max,
+    /// The min and max operations. If one operand is a quiet NaN and the other is a number,
+    /// they return the number. Two values that compare equal can still differ, so the total
+    /// order decides which one is returned: for max, negative zero loses to positive zero,
     /// and 1.0 loses to 1.
     /// </summary>
+    /// <param name="left">The first encoded value.</param>
+    /// <param name="right">The second encoded value.</param>
+    /// <param name="wantLarger">True for max, false for min.</param>
+    /// <param name="byMagnitude">True to compare absolute values.</param>
+    /// <param name="status">Receives InvalidOperation if an operand is a signaling NaN.</param>
+    /// <returns>The selected value in its canonical encoding, or a quiet NaN.</returns>
     public static Decimal128Integer Select(Decimal128Integer left, Decimal128Integer right, bool wantLarger,
         bool byMagnitude, ref Decimal128Status status)
     {
@@ -203,15 +228,20 @@ internal static class Decimal128Ordering
     }
 
     /// <summary>The bits with the sign cleared.</summary>
+    /// <param name="bits">The encoded value.</param>
+    /// <returns>The same encoding with the sign bit clear.</returns>
     public static Decimal128Integer Magnitude(Decimal128Integer bits)
     {
         return new Decimal128Integer(bits.High & ~Decimal128Encoding.SignMask, bits.Low);
     }
 
     /// <summary>
-    /// The numeric comparison of two values neither of which is a NaN, which is what the
-    /// selection above needs and what the infinities make more than a magnitude question.
+    /// Compares two values numerically. Neither may be NaN. Infinities are handled here, so
+    /// this is more than a magnitude comparison.
     /// </summary>
+    /// <param name="left">The first encoded value.</param>
+    /// <param name="right">The second encoded value.</param>
+    /// <returns>-1 if <paramref name="left"/> is smaller, 0 if they are equal, or 1 if it is larger.</returns>
     public static int CompareValues(Decimal128Integer left, Decimal128Integer right)
     {
         if (Decimal128Encoding.IsSpecial(left) || Decimal128Encoding.IsSpecial(right))
@@ -227,9 +257,11 @@ internal static class Decimal128Ordering
     }
 
     /// <summary>
-    /// A hash of the value rather than of the bits, so that members of one cohort agree and
-    /// the two zeros agree, as numeric equality requires.
+    /// A hash of the numeric value, not the bits. Equal values with different exponents,
+    /// and the two zeros, hash the same, as numeric equality requires.
     /// </summary>
+    /// <param name="bits">The encoded value.</param>
+    /// <returns>The hash code.</returns>
     public static int ValueHashCode(Decimal128Integer bits)
     {
         if (Decimal128Encoding.IsSpecial(bits))
@@ -248,8 +280,8 @@ internal static class Decimal128Ordering
             return 0;
         }
 
-        // Every member of a cohort has to hash alike, so the trailing zeros come off all
-        // the way down, however far past a zero exponent that goes.
+        // All equal values must hash the same, so remove every trailing zero, even past
+        // exponent zero.
         Decimal128Shaping.StripTrailingZeros(ref coefficient, ref exponent, int.MaxValue);
 
         return HashCode.Combine(Decimal128Encoding.IsNegative(bits), exponent, coefficient.High, coefficient.Low);

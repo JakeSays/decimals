@@ -4,12 +4,11 @@
 namespace Decimals.Conformance;
 
 /// <summary>
-/// The conditions a testcase line can name, as the General Decimal Arithmetic Specification
-/// names them.
+/// The conditions defined by the General Decimal Arithmetic Specification.
 /// </summary>
 /// <remarks>
-/// The bit for each condition is the one every decimal type in the repository uses for its
-/// own status enumeration, so a target converts between the two by a cast.
+/// Each decimal type's own status enum uses the same bit for each condition, so a target
+/// converts between the two with a cast.
 /// </remarks>
 [Flags]
 public enum DecTestStatus

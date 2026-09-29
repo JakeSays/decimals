@@ -4,25 +4,34 @@
 namespace Decimals.Internal;
 
 /// <summary>
-/// The square root on the engine's unit arrays, which the hypotenuse needs at a width past
-/// the format's own. The format-width root lives in <see cref="Decimal32SquareRoot"/>.
+/// The square root on wide numbers, which the hypotenuse needs at a precision wider than
+/// the format's. The square root at the format's precision is in
+/// <see cref="Decimal32SquareRoot"/>.
 /// </summary>
 /// <remarks>
-/// The coefficient is scaled until its integer square root carries a digit past the
-/// precision -- that digit is the guard -- and whatever the root leaves over becomes the
-/// sticky. Scaling has to keep the exponent even, since halving it is what makes the root's
-/// exponent. An exact root is then shortened toward the exponent the specification prefers,
-/// which is half the operand's.
+/// The coefficient is scaled until its integer square root has one digit more than the
+/// precision. That digit is the guard digit, and any remainder becomes the sticky bit. The
+/// scaling must keep the exponent even, because the root's exponent is half of it. An
+/// exact root is then shortened toward the exponent the specification prefers, which is
+/// half the operand's.
 /// </remarks>
 internal static unsafe class Decimal32WideSquareRoot
 {
     /// <summary>
-    /// Work buffers the root needs, each sized for the radicand: the running guess, the
-    /// quotient of each Newton step, the division's remainder, and a square to check
-    /// exactness with.
+    /// The number of work buffers the root needs, each sized for the radicand: the scaled
+    /// radicand, the current guess, the quotient of each Newton step, the division's
+    /// remainder, the sum for the next guess, and the square used to check exactness.
     /// </summary>
     public const int WorkBuffers = 6;
 
+    /// <summary>The square root of a value, rounded to the context.</summary>
+    /// <param name="result">Receives the rounded root.</param>
+    /// <param name="value">The operand.</param>
+    /// <param name="context">The precision, rounding, and exponent limits to apply.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <param name="work">A block of <see cref="WorkBuffers"/> buffers, each <paramref name="bufferLength"/> units long.</param>
+    /// <param name="bufferLength">The length of each work buffer, in units.</param>
+    /// <param name="accumulator">A 64-bit work buffer for squaring the root, as <see cref="Decimal32WideMultiply.Multiply"/> requires.</param>
     public static void SquareRoot(ref Decimal32WideNumber result, Decimal32WideNumber value, Decimal32WideContext context,
         ref Decimal32Status status, uint* work, int bufferLength, ulong* accumulator)
     {
@@ -61,7 +70,8 @@ internal static unsafe class Decimal32WideSquareRoot
             return;
         }
 
-        // Halving the exponent is what makes the root's, so the scaling has to leave it even.
+        // The root's exponent is half the operand's, so the scaling must leave the exponent
+        // even.
         var shift = (2 * (context.Digits + 1)) - value.Digits;
         if (((value.Exponent - shift) & 1) != 0)
         {
@@ -90,7 +100,7 @@ internal static unsafe class Decimal32WideSquareRoot
         var exponent = (value.Exponent - shift) / 2;
         var residue = 0;
 
-        // Exact when the root squared is the radicand again.
+        // The root is exact if its square equals the radicand.
         var rootNumber = default(Decimal32WideNumber);
         rootNumber.Lsu = guess;
         rootNumber.Units = rootLength;
@@ -118,7 +128,7 @@ internal static unsafe class Decimal32WideSquareRoot
         if (exact)
         {
             // Shorten toward the exponent the specification prefers, which is half the
-            // operand's, giving back the trailing zeros the scaling introduced.
+            // operand's, by removing the trailing zeros the scaling added.
             while (result.Exponent < idealExponent
                 && Decimal32WideUnits.DigitAt(result.Lsu, result.Units, 0) == 0
                 && !result.IsZero)
@@ -130,8 +140,8 @@ internal static unsafe class Decimal32WideSquareRoot
         }
         else
         {
-            // The root carries a guard digit, so all the remainder says is that something
-            // non-zero lies below it: a sticky bit, which is residue 1.
+            // The root has a guard digit, so the remainder only shows that something non-zero
+            // is below it. That is a sticky bit, which is residue 1.
             residue = 1;
         }
 
@@ -141,10 +151,10 @@ internal static unsafe class Decimal32WideSquareRoot
 
     /// <summary>
     /// The largest integer whose square does not exceed the value, by Newton's method. The
-    /// starting guess is the power of ten just above the root, which is certain to be high
-    /// and keeps the whole iteration in the decimal world.
+    /// starting guess is the power of ten just above the root, which is certain to be too
+    /// high and needs no binary conversion.
     /// </summary>
-    /// <returns>Units in the root, which is left in <paramref name="guess"/>.</returns>
+    /// <returns>The number of units in the root, which is left in <paramref name="guess"/>.</returns>
     private static int IntegerSquareRoot(uint* value, int valueLength, int valueDigits,
         uint* guess, uint* quotient, uint* remainder, uint* sum)
     {
@@ -155,7 +165,7 @@ internal static unsafe class Decimal32WideSquareRoot
             var quotientLength = Decimal32WideDivide.DivRem(value, valueLength, guess, guessLength,
                 remainder, quotient, out _);
 
-            // The next guess is the mean of this one and what it divides into.
+            // The next guess is the mean of this guess and the value divided by it.
             var sumLength = Decimal32WideUnits.AddSub(guess, guessLength, quotient, quotientLength, 0,
                 sum, 1);
 
@@ -163,7 +173,7 @@ internal static unsafe class Decimal32WideSquareRoot
 
             if (Decimal32WideUnits.Compare(sum, sumLength, guess, guessLength) >= 0)
             {
-                // No longer decreasing, so the previous guess is the root.
+                // The guess stopped decreasing, so the previous guess is the root.
                 return guessLength;
             }
 

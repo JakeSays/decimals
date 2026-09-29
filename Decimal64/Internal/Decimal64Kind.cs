@@ -4,9 +4,9 @@
 namespace Decimals.Internal;
 
 /// <summary>
-/// What a value is once its encoding has been taken apart. The fixed-width arithmetic reads
-/// this off the bits and never carries it; the arbitrary-precision engine behind the
-/// elementary functions carries it beside each working value.
+/// The kind of a decoded value. The fixed-width arithmetic reads the kind from the bits
+/// when needed. The arbitrary-precision engine used by the elementary functions stores it
+/// with each working value.
 /// </summary>
 internal enum Decimal64Kind
 {

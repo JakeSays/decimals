@@ -8,9 +8,9 @@ using Decimals.Internal;
 namespace Decimals.Tests;
 
 /// <summary>
-/// The members of <see cref="Decimal32"/> a .NET caller reaches for by name: rounding,
-/// selection, sign and clamp, the constants, the generic math hooks, and the conversions
-/// that have to refuse a value.
+/// Tests the <see cref="Decimal32"/> members that .NET code calls by name: rounding, min
+/// and max, sign and clamp, the constants, the generic math members, and the conversions
+/// that must reject a value.
 /// </summary>
 public class Decimal32SurfaceTests
 {
@@ -41,7 +41,8 @@ public class Decimal32SurfaceTests
         Assert.Equal("2.35", Decimal32.Round(value, 2, MidpointRounding.AwayFromZero).ToString());
         Assert.Equal("2", Decimal32.Round(value, MidpointRounding.ToZero).ToString());
 
-        // Asking for more places than the value carries leaves it alone, quantum and all.
+        // Asking for more decimal places than the value has returns it unchanged,
+        // including its exponent.
         Assert.Equal("2.345", Decimal32.Round(value, 8).ToString());
 
         Assert.True(Decimal32.IsNaN(Decimal32.Round(Decimal32.NaN, 2)));
@@ -93,7 +94,7 @@ public class Decimal32SurfaceTests
         Assert.Equal(Decimal32.Parse("-3"), Decimal32.MaxMagnitudeNumber(Decimal32.Parse("-3"), Decimal32.Parse("2")));
         Assert.Equal(Decimal32.Parse("2"), Decimal32.MinMagnitudeNumber(Decimal32.Parse("-3"), Decimal32.Parse("2")));
 
-        // A signaling NaN is invalid under every reading and comes back quiet.
+        // A signaling NaN is invalid in both definitions of max, and the result is quiet.
         var signaling = Decimal32.Parse("sNaN5");
         Assert.Equal("NaN5", Decimal32.Max(signaling, one).ToString());
     }
@@ -164,9 +165,9 @@ public class Decimal32SurfaceTests
     {
         Assert.Equal(42, (int)Decimal32.Parse("42.9"));
         Assert.Equal(-42, (int)Decimal32.Parse("-42.9"));
-        // The limits of long and ulong round to seven digits on the way in, and the rounded
-        // values sit inside the limits, so they are the largest that convert; one unit in
-        // the seventh digit above them does not.
+        // The long and ulong limits round to 7 digits when parsed. The rounded values are
+        // inside the limits, so they are the largest values that convert. One unit higher
+        // in the seventh digit does not convert.
         Assert.Equal(-9223372000000000000, (long)Decimal32.Parse("-9.223372E+18"));
         Assert.Equal(18446740000000000000, (ulong)Decimal32.Parse("1.844674E+19"));
         Assert.Equal(0, (int)Decimal32.Parse("0.999"));
@@ -189,8 +190,8 @@ public class Decimal32SurfaceTests
         Assert.Equal("0.1", ((Decimal32)0.1f).ToString());
         Assert.Equal("0.1000000", Decimal32.FromBinary(0.1, Decimal32BinaryConversion.ExactValue).ToString());
         Assert.Equal("2.5", Decimal32.FromBinary(2.5, Decimal32BinaryConversion.ExactValue).ToString());
-        // 0.3 is held as 0.299999999999999988897769753748..., which rounds back up at seven
-        // digits; a value with fewer bits shows its binary tail whole.
+        // The double 0.3 is 0.299999999999999988897769753748..., which rounds up to 0.3 at
+        // 7 digits. A double with fewer significant bits converts exactly.
         Assert.Equal("0.3000000", Decimal32.FromBinary(0.3, Decimal32BinaryConversion.ExactValue).ToString());
         Assert.Equal("0.0009765625", Decimal32.FromBinary(0.0009765625, Decimal32BinaryConversion.ExactValue).ToString());
         Assert.Equal("1.100000", Decimal32.FromBinary(1.1, Decimal32BinaryConversion.ExactValue).ToString());
@@ -208,7 +209,7 @@ public class Decimal32SurfaceTests
         Assert.True(Decimal32.IsInfinity(garbage));
         Assert.Equal(Decimal32.PositiveInfinity.ToBits(), Decimal32.Canonical(garbage).ToBits());
 
-        // The long form carrying 10^7, one past the largest coefficient.
+        // The long form with coefficient 10^7, one more than the largest coefficient.
         var wideCoefficient = Decimal32.FromBits(0x6CB89680);
         Assert.False(Decimal32.IsCanonical(wideCoefficient));
         Assert.True(Decimal32.IsZero(wideCoefficient));
@@ -221,8 +222,8 @@ public class Decimal32SurfaceTests
     [Fact]
     public void ConditionsDoNotLeakBetweenOperations()
     {
-        // A subnormal result underflows only when it is itself inexact; an earlier
-        // operation's inexactness in the same context must not make it so.
+        // A subnormal result raises Underflow only if the result itself is inexact. Inexact
+        // from an earlier operation in the same context must not cause Underflow.
         var context = new Decimal32Context();
         Decimal32.Divide(Decimal32.One, Decimal32.Parse("3"), ref context);
         Assert.True(context.HasRaised(Decimal32Status.Inexact));
@@ -234,9 +235,9 @@ public class Decimal32SurfaceTests
     }
 
     /// <summary>
-    /// A base of zero or infinity makes the divisor infinite, so the quotient is a zero at
-    /// an exponent far below the format; it has to come back clamped rather than packed as
-    /// whatever bits that exponent makes.
+    /// A base of zero or infinity makes the divisor infinite. The quotient is then a zero
+    /// with an exponent far below the format's range. It must be clamped to the smallest
+    /// exponent, not packed with an out-of-range exponent.
     /// </summary>
     [Fact]
     public void LogarithmInADegenerateBaseIsAClampedZero()
@@ -247,8 +248,8 @@ public class Decimal32SurfaceTests
 
         Assert.Equal("0E-101", Decimal32.Log(Decimal32.Parse("8"), Decimal32.PositiveInfinity).ToString());
 
-        // A base of one makes the divisor zero, which is a division by zero rather than an
-        // invalid operation: the quotient is an infinity.
+        // A base of one makes the divisor zero. That is a division by zero, not an invalid
+        // operation, so the result is an infinity.
         var byOne = new Decimal32Context();
         Assert.True(Decimal32.IsPositiveInfinity(Decimal32.Log(Decimal32.Parse("8"), Decimal32.One, ref byOne)));
         Assert.True(byOne.HasRaised(Decimal32Status.DivisionByZero));
@@ -257,8 +258,8 @@ public class Decimal32SurfaceTests
     }
 
     /// <summary>
-    /// The integer overload of ScaleB applies the same limit as the operand form: a shift
-    /// no operand could express is invalid, not an overflow.
+    /// The integer overload of ScaleB has the same limit as the decimal overload. A scale
+    /// too large to be a valid operand is an invalid operation, not an overflow.
     /// </summary>
     [Fact]
     public void ScaleByAnIntegerHonorsTheOperandLimit()

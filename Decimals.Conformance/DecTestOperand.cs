@@ -4,8 +4,7 @@
 namespace Decimals.Conformance;
 
 /// <summary>
-/// A token read as an operand or a result: which notation it uses, and what that notation
-/// carries.
+/// An operand or result token, classified by its notation.
 /// </summary>
 public readonly struct DecTestOperand
 {
@@ -19,14 +18,13 @@ public readonly struct DecTestOperand
     public DecTestOperandKind Kind { get; }
 
     /// <summary>
-    /// Hexadecimal digits for <see cref="DecTestOperandKind.Encoded"/>, the numeric string
-    /// for the other numeric kinds, and empty otherwise.
+    /// The hex digits for <see cref="DecTestOperandKind.Encoded"/>, the numeric string for
+    /// the other numeric kinds, and empty for the rest.
     /// </summary>
     public string Text { get; }
 
     /// <summary>
-    /// Which format an octothorpe notation names, as its count of hexadecimal digits: 8,
-    /// 16, or 32.
+    /// For the # notations, the format as its number of hex digits: 8, 16, or 32.
     /// </summary>
     public int HexDigitCount { get; }
 

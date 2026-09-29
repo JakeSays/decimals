@@ -4,18 +4,17 @@
 namespace Decimals.Conformance;
 
 /// <summary>
-/// The seam between the corpus reader and a decimal format.
+/// Connects the corpus runner to one decimal format.
 /// </summary>
 /// <remarks>
-/// This is the part that is not a port of the C++ harness. decNumber takes its precision
-/// and exponent range from the directives; these types have theirs fixed by the format, so
-/// the runner reads <see cref="Precision"/>, <see cref="MaxExponent"/>, and
-/// <see cref="MinExponent"/> and skips any test whose directives ask for something else.
-/// That rule is what makes a corpus written for an arbitrary-precision engine usable
-/// against fixed formats.
+/// decNumber takes its precision and exponent range from the directives. The types here
+/// have a fixed precision and exponent range. The runner compares <see cref="Precision"/>,
+/// <see cref="MaxExponent"/>, and <see cref="MinExponent"/> with the directives and skips
+/// any test case that does not match. This lets a corpus written for an arbitrary-precision
+/// engine run against fixed formats.
 /// </remarks>
-/// <typeparam name="TSelf">The implementing type, so the members can be static.</typeparam>
-/// <typeparam name="TDecimal">The decimal type being driven.</typeparam>
+/// <typeparam name="TSelf">The implementing type. It lets the members be static.</typeparam>
+/// <typeparam name="TDecimal">The decimal type under test.</typeparam>
 public interface IDecTestTarget<TSelf, TDecimal>
     where TSelf : IDecTestTarget<TSelf, TDecimal>
 {
@@ -27,14 +26,14 @@ public interface IDecTestTarget<TSelf, TDecimal>
 
     static abstract int MinExponent { get; }
 
-    /// <summary>The width of this format's octothorpe notation: 8, 16, or 32 digits.</summary>
+    /// <summary>The number of hex digits in this format's # notation: 8, 16, or 32.</summary>
     static abstract int HexDigitCount { get; }
 
     /// <summary>
-    /// Whether a non-canonical DPD encoding survives being held by the type. The corpus
-    /// expects the copy family to hand such an operand back untouched, which only a type
-    /// storing the interchange form can do; one that stores the binary-integer form
-    /// canonicalizes on the way in, and those cases are skipped for it.
+    /// True if the type keeps a non-canonical DPD encoding unchanged. The corpus expects the
+    /// copy operations to return such an operand unchanged. Only a type that stores DPD can
+    /// do that. A type that stores BID makes the encoding canonical when it reads it, so
+    /// the runner skips those cases for it.
     /// </summary>
     static abstract bool PreservesNonCanonicalEncodings { get; }
 
@@ -51,8 +50,8 @@ public interface IDecTestTarget<TSelf, TDecimal>
     static abstract DecTestClass Classify(TDecimal value);
 
     /// <summary>
-    /// Runs the operation. Returns false when the type does not have it, which the runner
-    /// counts as a skip rather than a failure.
+    /// Runs the operation. Returns false if the type does not support it. The runner counts
+    /// that as a skip, not a failure.
     /// </summary>
     static abstract bool TryApply(DecTestOperation operation, ReadOnlySpan<TDecimal> operands,
         ref DecTestContext context, out TDecimal result);

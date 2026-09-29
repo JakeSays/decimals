@@ -4,25 +4,33 @@
 namespace Decimals.Internal;
 
 /// <summary>
-/// Fits a result into the format: rounds the coefficient to seven digits, applies the
-/// pending residue once, brings the exponent into range, and raises the conditions each
-/// step calls for. This is decNumber's <c>decSetCoeff</c>, <c>decApplyRound</c>,
-/// <c>decFinalize</c>, and <c>decSetSubnormal</c> on a machine word.
+/// Fits a result into the format. It rounds the coefficient to 7 digits, applies the
+/// pending residue once, brings the exponent into range, and raises the conditions for each
+/// step. This is decNumber's <c>decSetCoeff</c>, <c>decApplyRound</c>, <c>decFinalize</c>,
+/// and <c>decSetSubnormal</c>, done in a 64-bit word.
 /// </summary>
 /// <remarks>
 /// <para>
-/// The coefficient may arrive up to twenty digits wide, and the residue describes whatever
-/// the operation discarded below it. Digits above the precision are folded into the residue
-/// first, so a value that turns out subnormal is rounded exactly once, at the place the
-/// subnormal range dictates, rather than to precision and then again.
+/// The coefficient can have up to 20 digits, and the residue summarizes what the operation
+/// discarded below it. Digits beyond the precision are folded into the residue first. A
+/// result that turns out to be subnormal is then rounded only once, at the position the
+/// subnormal range requires, not once to precision and again for the subnormal range.
 /// </para>
 /// <para>
-/// Subnormal is decided before the residue is applied, as decNumber does it: a value below
-/// Nmin that rounds up to Nmin is still reported as a subnormal that underflowed.
+/// As in decNumber, subnormal is decided before the residue is applied. A value below
+/// Nmin that rounds up to Nmin is still reported as subnormal and as underflow.
 /// </para>
 /// </remarks>
 internal static class Decimal32Finalizer
 {
+    /// <summary>Rounds a result to the format, applies the exponent limits, and encodes it.</summary>
+    /// <param name="negative">Whether the result is negative.</param>
+    /// <param name="coefficient">The result's coefficient, of up to 20 digits.</param>
+    /// <param name="exponent">The result's exponent, which can be outside the format's range.</param>
+    /// <param name="residue">The residue of the digits already discarded below <paramref name="coefficient"/>.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the rounding and the exponent limits raise.</param>
+    /// <returns>The encoded result: a finite value, or an infinity on overflow.</returns>
     public static uint Finalize(bool negative, ulong coefficient, int exponent, Decimal32Residue residue,
         Decimal32Rounding rounding, ref Decimal32Status status)
     {
@@ -58,8 +66,8 @@ internal static class Decimal32Finalizer
             coefficient++;
             if (coefficient == Decimal32Encoding.CoefficientLimit)
             {
-                // Rounding up carried into a new digit: 9999999 became 10000000, which is
-                // 1000000 one decade up.
+                // Rounding up added a digit: 9999999 became 10000000, which is stored as
+                // 1000000 with the exponent one higher.
                 coefficient = Decimal32Encoding.CoefficientLimit / 10;
                 exponent++;
                 adjusted++;
@@ -73,8 +81,8 @@ internal static class Decimal32Finalizer
 
         if (exponent > Decimal32Encoding.MaxQuantumExponent)
         {
-            // Folded down: the value fits, but only if the coefficient carries the extra
-            // magnitude as trailing zeros rather than the exponent.
+            // Fold down: the value fits only if the coefficient takes the extra magnitude as
+            // trailing zeros and the exponent is lowered to the maximum.
             coefficient *= Decimal32Tables.PowerOfTen(exponent - Decimal32Encoding.MaxQuantumExponent);
             exponent = Decimal32Encoding.MaxQuantumExponent;
             status |= Decimal32Status.Clamped;
@@ -84,9 +92,13 @@ internal static class Decimal32Finalizer
     }
 
     /// <summary>
-    /// A zero has no digits to place, so only its exponent has to be brought into range.
-    /// It is never subnormal, whatever its exponent.
+    /// A zero has no digits to place, so only its exponent must be brought into range. A
+    /// zero is never subnormal, whatever its exponent.
     /// </summary>
+    /// <param name="negative">Whether the zero is negative.</param>
+    /// <param name="exponent">The zero's exponent, which can be outside the format's range.</param>
+    /// <param name="status">Receives Clamped if the exponent was changed.</param>
+    /// <returns>The encoded zero.</returns>
     public static uint Zero(bool negative, int exponent, ref Decimal32Status status)
     {
         if (exponent < Decimal32Encoding.MinQuantumExponent)
@@ -123,12 +135,13 @@ internal static class Decimal32Finalizer
         if (residue != Decimal32Residue.Exact
             && Decimal32Rounder.ShouldIncrement(coefficient, residue, negative, rounding))
         {
-            // Seven digits were rounded down to fewer, so the increment cannot carry past
-            // the precision; at most it reaches Nmin, which is still reported as underflow.
+            // The coefficient has fewer than 7 digits here, so the increment cannot carry
+            // beyond the precision. At most it reaches Nmin, which is still reported as
+            // underflow.
             coefficient++;
         }
 
-        // IEEE 754's default rule: a subnormal result underflows exactly when it is inexact.
+        // IEEE 754 default rule: a subnormal result underflows if and only if it is inexact.
         if ((status & Decimal32Status.Inexact) != 0)
         {
             status |= Decimal32Status.Underflow;
@@ -136,8 +149,8 @@ internal static class Decimal32Finalizer
 
         if (coefficient == 0)
         {
-            // Everything was rounded away. The exponent the value wanted was below the
-            // smallest the format holds, so it has been clamped up to reach here.
+            // Everything was rounded away. The exponent the value needed was below the
+            // format's minimum, so it was clamped up to get here.
             status |= Decimal32Status.Clamped;
         }
 
@@ -145,9 +158,13 @@ internal static class Decimal32Finalizer
     }
 
     /// <summary>
-    /// What overflow produces depends on the rounding mode: the modes that round away from
-    /// the value give an infinity, the ones that round toward it give the largest finite.
+    /// The overflow result depends on the rounding mode. Modes that round away from zero
+    /// give infinity. Modes that round toward zero give the largest finite value.
     /// </summary>
+    /// <param name="negative">Whether the result is negative.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives Overflow, Inexact, and Rounded.</param>
+    /// <returns>The encoded infinity or largest finite value, with the result's sign.</returns>
     public static uint Overflowed(bool negative, Decimal32Rounding rounding, ref Decimal32Status status)
     {
         status |= Decimal32Status.Overflow | Decimal32Status.Inexact | Decimal32Status.Rounded;

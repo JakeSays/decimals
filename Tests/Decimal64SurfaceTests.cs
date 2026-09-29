@@ -8,9 +8,9 @@ using Decimals.Internal;
 namespace Decimals.Tests;
 
 /// <summary>
-/// The members of <see cref="Decimal64"/> a .NET caller reaches for by name: rounding,
-/// selection, sign and clamp, the constants, the generic math hooks, and the conversions
-/// that have to refuse a value.
+/// Tests the <see cref="Decimal64"/> members that .NET code calls by name: rounding, min
+/// and max, sign and clamp, the constants, the generic math members, and the conversions
+/// that must reject a value.
 /// </summary>
 public class Decimal64SurfaceTests
 {
@@ -41,7 +41,8 @@ public class Decimal64SurfaceTests
         Assert.Equal("2.35", Decimal64.Round(value, 2, MidpointRounding.AwayFromZero).ToString());
         Assert.Equal("2", Decimal64.Round(value, MidpointRounding.ToZero).ToString());
 
-        // Asking for more places than the value carries leaves it alone, quantum and all.
+        // Asking for more decimal places than the value has returns it unchanged,
+        // including its exponent.
         Assert.Equal("2.345", Decimal64.Round(value, 8).ToString());
 
         Assert.True(Decimal64.IsNaN(Decimal64.Round(Decimal64.NaN, 2)));
@@ -93,7 +94,7 @@ public class Decimal64SurfaceTests
         Assert.Equal(Decimal64.Parse("-3"), Decimal64.MaxMagnitudeNumber(Decimal64.Parse("-3"), Decimal64.Parse("2")));
         Assert.Equal(Decimal64.Parse("2"), Decimal64.MinMagnitudeNumber(Decimal64.Parse("-3"), Decimal64.Parse("2")));
 
-        // A signaling NaN is invalid under every reading and comes back quiet.
+        // A signaling NaN is invalid in both definitions of max, and the result is quiet.
         var signaling = Decimal64.Parse("sNaN5");
         Assert.Equal("NaN5", Decimal64.Max(signaling, one).ToString());
     }
@@ -164,8 +165,8 @@ public class Decimal64SurfaceTests
     {
         Assert.Equal(42, (int)Decimal64.Parse("42.9"));
         Assert.Equal(-42, (int)Decimal64.Parse("-42.9"));
-        // Nineteen and twenty digit limits round to sixteen digits on the way in, so the
-        // largest values that convert are the rounded ones below the limit.
+        // The long and ulong limits have 19 and 20 digits, which round to 16 digits when
+        // parsed. The largest values that convert are the rounded values below each limit.
         Assert.Equal(-9223372036854775000, (long)Decimal64.Parse("-9.223372036854775E+18"));
         Assert.Equal(18446744073709550000, (ulong)Decimal64.Parse("1.844674407370955E+19"));
         Assert.Equal(0, (int)Decimal64.Parse("0.999"));
@@ -187,8 +188,8 @@ public class Decimal64SurfaceTests
         Assert.Equal("0.1", ((Decimal64)0.1f).ToString());
         Assert.Equal("0.1000000000000000", Decimal64.FromBinary(0.1, Decimal64BinaryConversion.ExactValue).ToString());
         Assert.Equal("2.5", Decimal64.FromBinary(2.5, Decimal64BinaryConversion.ExactValue).ToString());
-        // 0.3 is held as 0.299999999999999988897769753748..., which rounds back up at sixteen
-        // digits; a value with fewer bits shows its binary tail whole.
+        // The double 0.3 is 0.299999999999999988897769753748..., which rounds up to 0.3 at
+        // 16 digits. A double with fewer significant bits converts exactly.
         Assert.Equal("0.3000000000000000", Decimal64.FromBinary(0.3, Decimal64BinaryConversion.ExactValue).ToString());
         Assert.Equal("0.0009765625", Decimal64.FromBinary(0.0009765625, Decimal64BinaryConversion.ExactValue).ToString());
         Assert.Equal("1.100000000000000", Decimal64.FromBinary(1.1, Decimal64BinaryConversion.ExactValue).ToString());
@@ -206,7 +207,7 @@ public class Decimal64SurfaceTests
         Assert.True(Decimal64.IsInfinity(garbage));
         Assert.Equal(Decimal64.PositiveInfinity.ToBits(), Decimal64.Canonical(garbage).ToBits());
 
-        // The long form carrying 10^16, one past the largest coefficient.
+        // The long form with coefficient 10^16, one more than the largest coefficient.
         var wideCoefficient = Decimal64.FromBits(0x6C7386F26FC10000);
         Assert.False(Decimal64.IsCanonical(wideCoefficient));
         Assert.True(Decimal64.IsZero(wideCoefficient));
@@ -219,8 +220,8 @@ public class Decimal64SurfaceTests
     [Fact]
     public void ConditionsDoNotLeakBetweenOperations()
     {
-        // A subnormal result underflows only when it is itself inexact; an earlier
-        // operation's inexactness in the same context must not make it so.
+        // A subnormal result raises Underflow only if the result itself is inexact. Inexact
+        // from an earlier operation in the same context must not cause Underflow.
         var context = new Decimal64Context();
         Decimal64.Divide(Decimal64.One, Decimal64.Parse("3"), ref context);
         Assert.True(context.HasRaised(Decimal64Status.Inexact));
@@ -232,9 +233,9 @@ public class Decimal64SurfaceTests
     }
 
     /// <summary>
-    /// A base of zero or infinity makes the divisor infinite, so the quotient is a zero at
-    /// an exponent far below the format; it has to come back clamped rather than packed as
-    /// whatever bits that exponent makes.
+    /// A base of zero or infinity makes the divisor infinite. The quotient is then a zero
+    /// with an exponent far below the format's range. It must be clamped to the smallest
+    /// exponent, not packed with an out-of-range exponent.
     /// </summary>
     [Fact]
     public void LogarithmInADegenerateBaseIsAClampedZero()
@@ -245,8 +246,8 @@ public class Decimal64SurfaceTests
 
         Assert.Equal("0E-398", Decimal64.Log(Decimal64.Parse("8"), Decimal64.PositiveInfinity).ToString());
 
-        // A base of one makes the divisor zero, which is a division by zero rather than an
-        // invalid operation: the quotient is an infinity.
+        // A base of one makes the divisor zero. That is a division by zero, not an invalid
+        // operation, so the result is an infinity.
         var byOne = new Decimal64Context();
         Assert.True(Decimal64.IsPositiveInfinity(Decimal64.Log(Decimal64.Parse("8"), Decimal64.One, ref byOne)));
         Assert.True(byOne.HasRaised(Decimal64Status.DivisionByZero));
@@ -255,8 +256,8 @@ public class Decimal64SurfaceTests
     }
 
     /// <summary>
-    /// The integer overload of ScaleB applies the same limit as the operand form: a shift
-    /// no operand could express is invalid, not an overflow.
+    /// The integer overload of ScaleB has the same limit as the decimal overload. A scale
+    /// too large to be a valid operand is an invalid operation, not an overflow.
     /// </summary>
     [Fact]
     public void ScaleByAnIntegerHonorsTheOperandLimit()

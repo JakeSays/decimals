@@ -6,9 +6,9 @@ using BenchmarkDotNet.Attributes;
 namespace Decimals.Benchmarks;
 
 /// <summary>
-/// <see cref="Decimal128"/> on two operand sets. The wide set is decbench's, so the numbers
-/// read against decQuad; the full-width set fills the coefficient, which is where the
-/// four-word paths are exercised.
+/// Times <see cref="Decimal128"/> on two operand sets. The wide set is decbench's, so the
+/// results can be compared with decQuad. The full-width set fills the coefficient, which
+/// exercises the four-word code paths.
 /// </summary>
 public class Decimal128Benchmarks
 {

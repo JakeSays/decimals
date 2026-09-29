@@ -4,32 +4,39 @@
 namespace Decimals.Internal;
 
 /// <summary>
-/// Multiplication on the engine's unit arrays, following decNumber's <c>decMultiplyOp</c>
-/// fast path.
+/// Multiplication on wide numbers, following the fast path of decNumber's
+/// <c>decMultiplyOp</c>.
 /// </summary>
 /// <remarks>
-/// The partial products accumulate lazily in 64-bit columns, but the engine's operands run
-/// to many units and a column cannot absorb an unbounded number of products: each is under
-/// 10^18, and 64 bits hold eighteen of them. decNumber calls that bound <c>FASTLAZY</c> and
-/// spins the accumulator to settle carries whenever it is reached.
+/// The partial products are added into 64-bit columns without carrying. The operands can
+/// have many units, and a column cannot hold an unlimited number of products: each product
+/// is below 10^18, and 64 bits hold 18 of them. decNumber calls that limit <c>FASTLAZY</c>
+/// and resolves the carries whenever it is reached.
 /// </remarks>
 internal static unsafe class Decimal64WideMultiply
 {
     /// <summary>
-    /// Rows that may accumulate before the carries have to be settled. A product of two
-    /// units is under 10^18 and a 64-bit column holds eighteen of them.
+    /// The number of rows that can be added before the carries must be resolved. A product
+    /// of two units is below 10^18, and a 64-bit column holds 18 of them.
     /// </summary>
     private const int LazyLimit = 18;
 
     /// <summary>
-    /// Columns an accumulator needs beyond the product's own, for the two-place carry the
-    /// resolution below can push upward.
+    /// The extra columns an accumulator needs beyond the product's own, for the carry of up
+    /// to two columns that resolving can push upward.
     /// </summary>
     public const int AccumulatorSlack = 2;
 
     /// <summary>
-    /// Multiplies two finite values. The product is exact, so the caller rounds it.
+    /// Multiplies two finite values. The product is exact, and the caller rounds it.
     /// </summary>
+    /// <param name="result">Receives the exact product. Its buffer must hold the units of both operands combined.</param>
+    /// <param name="left">The first factor.</param>
+    /// <param name="right">The second factor.</param>
+    /// <param name="accumulator">
+    /// A work buffer of at least the units of both operands plus
+    /// <see cref="AccumulatorSlack"/> 64-bit words.
+    /// </param>
     public static void Multiply(ref Decimal64WideNumber result, Decimal64WideNumber left, Decimal64WideNumber right,
         ulong* accumulator)
     {
@@ -77,8 +84,8 @@ internal static unsafe class Decimal64WideMultiply
     }
 
     /// <summary>
-    /// Settles the columns back into units. A column can carry more than one unit's worth,
-    /// which is what lets the accumulation run eighteen rows deep before this is needed.
+    /// Reduces each column to a single unit and carries the rest upward. A column can hold
+    /// more than one unit's worth, which is what lets 18 rows be added before this runs.
     /// </summary>
     private static void ResolveCarries(ulong* accumulator, int columns)
     {
@@ -93,8 +100,8 @@ internal static unsafe class Decimal64WideMultiply
 
             if (carry >= Decimal64WideNumber.UnitBase)
             {
-                // Two units' worth, which the deep accumulation makes possible though it
-                // is rare.
+                // The carry is worth two units. This is rare, but adding many rows makes it
+                // possible.
                 var upper = carry / Decimal64WideNumber.UnitBase;
                 accumulator[index + 2] += upper;
                 accumulator[index] -= (ulong)Decimal64WideNumber.UnitBase * Decimal64WideNumber.UnitBase * upper;

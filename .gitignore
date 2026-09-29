@@ -2,5 +2,8 @@ obj/
 bin/
 .idea/
 *.DotSettings.user
-# Where BenchmarkDotNet lands when it is not told to write elsewhere.
+# BenchmarkDotNet's default output directory.
 BenchmarkDotNet.Artifacts/
+# The full Sayed-Ahmed and Fahmy vector set, 1.2 GB unpacked. dectest --fetch-hfahmy
+# downloads it. The sample next to it is committed.
+TestData/Hfahmy/Full/

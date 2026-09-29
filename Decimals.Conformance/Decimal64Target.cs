@@ -6,14 +6,13 @@ using System.Globalization;
 namespace Decimals.Conformance;
 
 /// <summary>
-/// Drives <see cref="Decimal64"/> from the corpus, which reaches it through the
-/// <c>decDouble</c> group and the generated <c>d64</c> groups.
+/// Runs corpus test cases against <see cref="Decimal64"/>. Its test cases are in the
+/// <c>decDouble</c> group and the generated <c>d64</c> files.
 /// </summary>
 /// <remarks>
-/// The type carries its own context, rounding, status, and class enumerations, laid out
-/// with the same values as the runner's so that the two convert by a cast. Every
-/// operation runs under a context built from the runner's and its conditions are copied
-/// back.
+/// Decimal64 has its own context, rounding, status, and class types. Their values match
+/// the runner's, so they convert with a cast. Each operation runs with a context created
+/// from the runner's, and the conditions are copied back afterward.
 /// </remarks>
 public readonly struct Decimal64Target : IDecTestTarget<Decimal64Target, Decimal64>
 {
@@ -27,7 +26,7 @@ public readonly struct Decimal64Target : IDecTestTarget<Decimal64Target, Decimal
 
     public static int HexDigitCount => 16;
 
-    /// <summary>The binary-integer form canonicalizes on the way in.</summary>
+    /// <summary>False: the type stores BID, which makes an encoding canonical when it is read.</summary>
     public static bool PreservesNonCanonicalEncodings => false;
 
     public static Decimal64 FromString(ReadOnlySpan<char> text, ref DecTestContext context)

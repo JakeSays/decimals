@@ -9,31 +9,31 @@ using System.Runtime.InteropServices;
 namespace Decimals.Internal;
 
 /// <summary>
-/// Powers of ten, the reciprocals that stand in for dividing by them, and the digit count.
-/// These sit under every operation, so each is a handful of instructions and no table is
-/// read with a bounds check.
+/// Powers of ten, the reciprocals used to divide by them, and the digit count. Every
+/// operation uses these, so each takes only a few instructions and no lookup has a bounds
+/// check.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Every table here is a span over the assembly's data section: nothing is allocated and no
-/// class constructor runs before a lookup.
+/// Every table here is a span over the assembly's data section. Nothing is allocated, and
+/// no static constructor runs before a lookup.
 /// </para>
 /// <para>
 /// Division by a power of ten is a multiply and two shifts. 10^p is 2^p times 5^p, and
-/// <c>floor(floor(n / a) / b)</c> is <c>floor(n / ab)</c>, so the division becomes a shift
-/// right by p followed by a division by 5^p; the shift takes p bits off the numerator while
-/// taking 2.32p bits off the divisor, which is what leaves room for a 64-bit multiplier.
-/// For that division take <c>M = ceil(2^s / d)</c> with <c>s = 64 + floor(log2 d)</c> and
-/// <c>e = M*d - 2^s</c>. The quotient <c>n*M / 2^s</c> is exact for every numerator up to
-/// <c>n_max</c> when <c>n_max * e &lt; 2^s</c>, and with the pre-shift that holds for the
-/// whole 64-bit range at every power: e is below d, which is below 2^(s-63), and the
-/// shifted numerator is below 2^(64-p). So there is no correction step. The constants were
-/// found by a generator and are re-derived by <c>Decimal64TableTests</c>.
+/// <c>floor(floor(n / a) / b)</c> equals <c>floor(n / ab)</c>. So the division is a right
+/// shift by p followed by a division by 5^p. The shift removes p bits from the numerator
+/// and about 2.32p bits from the divisor, which leaves room for a 64-bit multiplier. For
+/// the division by d = 5^p, let <c>s = 64 + floor(log2 d)</c>, <c>M = ceil(2^s / d)</c>,
+/// and <c>e = M*d - 2^s</c>. The quotient <c>n*M / 2^s</c> is exact for every numerator up
+/// to <c>n_max</c> if <c>n_max * e &lt; 2^s</c>. With the pre-shift, this holds for the
+/// whole 64-bit range at every power: e is below d, d is below 2^(s-63), and the shifted
+/// numerator is below 2^(64-p). So no correction step is needed. The constants were
+/// generated, and <c>Decimal64TableTests</c> recomputes them.
 /// </para>
 /// </remarks>
 internal static class Decimal64Tables
 {
-    /// <summary>Largest power of ten that fits a <see cref="ulong"/>.</summary>
+    /// <summary>The largest power of ten that fits in a <see cref="ulong"/>.</summary>
     public const int MaxPower = 19;
 
     private static ReadOnlySpan<ulong> Powers =>
@@ -61,8 +61,8 @@ internal static class Decimal64Tables
     ];
 
     /// <summary>
-    /// <c>ceil(2^(64 + shift) / 5^p)</c> for each power. Power zero divides by one, which the
-    /// callers never ask for.
+    /// <c>ceil(2^(64 + shift) / 5^p)</c> for each power. Power zero would divide by one,
+    /// which no caller does.
     /// </summary>
     private static ReadOnlySpan<ulong> Multipliers =>
     [
@@ -88,32 +88,40 @@ internal static class Decimal64Tables
         0xEC1E4A7DB69561A6
     ];
 
-    /// <summary><c>floor(log2 5^p)</c>: what the high half of the product is shifted by.</summary>
+    /// <summary><c>floor(log2 5^p)</c>: the right shift applied to the high half of the product.</summary>
     private static ReadOnlySpan<byte> Shifts =>
     [
         0, 2, 4, 6, 9, 11, 13, 16, 18, 20, 23, 25, 27, 30, 32, 34, 37, 39, 41, 44
     ];
 
-    /// <summary>Ten to <paramref name="power"/>, which must be at most <see cref="MaxPower"/>.</summary>
+    /// <summary>10 to the power <paramref name="power"/>, which must be at most <see cref="MaxPower"/>.</summary>
+    /// <param name="power">The power of ten, from 0 to <see cref="MaxPower"/>. It is not range-checked.</param>
+    /// <returns>10^<paramref name="power"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ulong PowerOfTen(int power)
     {
         return Unsafe.Add(ref MemoryMarshal.GetReference(Powers), power);
     }
 
-    /// <summary>The multiplier for a power, so a test can re-derive it.</summary>
+    /// <summary>The multiplier for a power. Tests use it to check the table.</summary>
+    /// <param name="power">The power of ten, from 0 to <see cref="MaxPower"/>.</param>
+    /// <returns><c>ceil(2^(64 + shift) / 5^power)</c>, or 0 for power zero.</returns>
     public static ulong Multiplier(int power)
     {
         return Multipliers[power];
     }
 
-    /// <summary>The post-shift for a power, so a test can re-derive it.</summary>
+    /// <summary>The post-shift for a power. Tests use it to check the table.</summary>
+    /// <param name="power">The power of ten, from 0 to <see cref="MaxPower"/>.</param>
+    /// <returns><c>floor(log2 5^power)</c>.</returns>
     public static int Shift(int power)
     {
         return Shifts[power];
     }
 
-    /// <summary>Half of ten to <paramref name="power"/>, the point a discarded part is judged against.</summary>
+    /// <summary>Half of 10 to the power <paramref name="power"/>, used to classify a discarded part.</summary>
+    /// <param name="power">The power of ten, from 0 to <see cref="MaxPower"/>. It is not range-checked.</param>
+    /// <returns>10^<paramref name="power"/> / 2, which is 0 for power zero.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ulong HalfPowerOfTen(int power)
     {
@@ -121,9 +129,13 @@ internal static class Decimal64Tables
     }
 
     /// <summary>
-    /// Divides by ten to <paramref name="power"/>, which must be between 1 and
-    /// <see cref="MaxPower"/>, handing back the remainder as well.
+    /// Divides by 10 to the power <paramref name="power"/> and returns the remainder too.
+    /// The power must be between 1 and <see cref="MaxPower"/>.
     /// </summary>
+    /// <param name="value">The dividend.</param>
+    /// <param name="power">The power of ten to divide by, from 1 to <see cref="MaxPower"/>. It is not range-checked.</param>
+    /// <param name="remainder">Receives the remainder.</param>
+    /// <returns>The quotient.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ulong DivRemPowerOfTen(ulong value, int power, out ulong remainder)
     {
@@ -136,13 +148,15 @@ internal static class Decimal64Tables
     }
 
     /// <summary>
-    /// How many digits a value is written with. Zero counts as one.
+    /// The number of decimal digits in a value. Zero has one digit.
     /// </summary>
     /// <remarks>
-    /// The bit length gives the count to within one, since a bit is worth log10(2) of a
-    /// digit, and one comparison against a power of ten settles it. Or-ing in a one is what
-    /// makes zero read as one digit without a branch of its own.
+    /// The bit length gives the digit count to within one, because each bit is worth
+    /// log10(2) of a digit. One comparison with a power of ten gives the exact count. OR-ing
+    /// in a 1 makes zero count as one digit without a separate branch.
     /// </remarks>
+    /// <param name="value">The value to measure.</param>
+    /// <returns>The number of decimal digits, from 1 to 20.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int CountDigits(ulong value)
     {
@@ -150,8 +164,8 @@ internal static class Decimal64Tables
         var bitLength = 64 - BitOperations.LeadingZeroCount(nonZero);
         var digits = ((bitLength * 1233) >> 12) + 1;
 
-        // The estimate is one too many for values below the power it names, which is a
-        // coin flip on mixed values and so is settled by a compare rather than a branch.
+        // The estimate is one too high for values below the power it names. That is random
+        // for mixed values, so it is corrected with a comparison instead of a branch.
         return digits - Unsafe.BitCast<bool, byte>(nonZero < PowerOfTen(digits - 1));
     }
 }

@@ -12,9 +12,9 @@ using Decimals.Internal;
 namespace Decimals.Benchmarks;
 
 /// <summary>
-/// The pieces underneath formatting a <see cref="Decimal32"/>, timed one at a time: planning
-/// the layout, writing the digits, looking up the culture, and the whole operation under
-/// each provider. This is what says where a nanosecond of formatting goes.
+/// Times each step of formatting a <see cref="Decimal32"/> separately: planning the layout,
+/// writing the digits, looking up the culture, and the whole operation with each kind of
+/// provider. This shows where the formatting time goes.
 /// </summary>
 [GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
 [CategoriesColumn]

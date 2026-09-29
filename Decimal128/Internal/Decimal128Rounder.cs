@@ -7,15 +7,15 @@ using System.Runtime.InteropServices;
 namespace Decimals.Internal;
 
 /// <summary>
-/// Discarding digits into a residue, and deciding what a residue does to the last digit
-/// kept under each of the eight rounding modes.
+/// Discards digits into a residue, and decides for each of the eight rounding modes
+/// whether a residue increments the last kept digit.
 /// </summary>
 /// <remarks>
-/// The classifications here are computed from the bits of a residue rather than chosen by
-/// comparisons: which side of half a discarded part falls on is decided by the data, and
-/// a branch on it mispredicts as often as not. A residue's value has its non-zero bit at
-/// the bottom, its at-least-half bit two above that, and its above-half bit between them,
-/// which is what makes below half a one, half a five, and above half a seven.
+/// The residue is computed from bits instead of chosen by comparisons. Which side of half
+/// a discarded part falls on depends on the data, so a branch on it mispredicts about half
+/// the time. Bit 0 of a residue means non-zero, bit 1 means above half, and bit 2 means at
+/// least half. This gives below half the value 1, half the value 5, and above half the
+/// value 7.
 /// </remarks>
 internal static class Decimal128Rounder
 {
@@ -26,15 +26,18 @@ internal static class Decimal128Rounder
     private const int AtLeastHalfBit = 2;
 
     /// <summary>
-    /// The flipped residue at each value: below half and above half exchanged, and every
-    /// other value as it is.
+    /// The result of <see cref="Flip"/> for each residue value: below half and above half
+    /// swap, and every other value stays the same.
     /// </summary>
     private static ReadOnlySpan<byte> Flipped => [0, 7, 2, 3, 4, 5, 6, 1];
 
     /// <summary>
-    /// The residue of a discarded part that stands alone, measured against half of the
-    /// power it was discarded by, which is never zero.
+    /// The residue of a discarded part with nothing below it. <paramref name="half"/> is
+    /// half of the power of ten that was divided out, and is never zero.
     /// </summary>
+    /// <param name="discarded">The discarded digits, as an integer.</param>
+    /// <param name="half">Half of the power of ten the discarded digits were divided out by.</param>
+    /// <returns>Where the discarded part lies relative to half a unit of the kept digits.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Decimal128Residue Of(ulong discarded, ulong half)
     {
@@ -45,7 +48,10 @@ internal static class Decimal128Rounder
             | (aboveHalf << AboveHalfBit));
     }
 
-    /// <summary>The same, for a discarded part and a halfway point of two words.</summary>
+    /// <summary>The residue of a two-word discarded part with nothing below it.</summary>
+    /// <param name="discarded">The discarded digits, as an integer.</param>
+    /// <param name="half">Half of the power of ten the discarded digits were divided out by. It is never zero.</param>
+    /// <returns>Where the discarded part lies relative to half a unit of the kept digits.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Decimal128Residue Of(Decimal128Integer discarded, Decimal128Integer half)
     {
@@ -57,10 +63,14 @@ internal static class Decimal128Rounder
     }
 
     /// <summary>
-    /// The residue of a discarded part with an older residue already lying below it. The
-    /// older one is too far down to reach halfway on its own, so it can only break a tie and
-    /// make a zero part non-zero.
+    /// The residue of a discarded part that has an earlier residue below it. The earlier
+    /// residue is too small to reach half by itself. It can only turn an exact half into
+    /// above half, or a zero part into below half.
     /// </summary>
+    /// <param name="discarded">The discarded digits, as an integer.</param>
+    /// <param name="half">Half of the power of ten the discarded digits were divided out by.</param>
+    /// <param name="below">The residue of digits discarded earlier, below these.</param>
+    /// <returns>Where the whole discarded part lies relative to half a unit of the kept digits.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Decimal128Residue Combine(ulong discarded, ulong half, Decimal128Residue below)
     {
@@ -73,7 +83,11 @@ internal static class Decimal128Rounder
             | (aboveHalf << AboveHalfBit));
     }
 
-    /// <summary>The same, for a discarded part and a halfway point of two words.</summary>
+    /// <summary>The residue of a two-word discarded part that has an earlier residue below it.</summary>
+    /// <param name="discarded">The discarded digits, as an integer.</param>
+    /// <param name="half">Half of the power of ten the discarded digits were divided out by.</param>
+    /// <param name="below">The residue of digits discarded earlier, below these.</param>
+    /// <returns>Where the whole discarded part lies relative to half a unit of the kept digits.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Decimal128Residue Combine(Decimal128Integer discarded, Decimal128Integer half,
         Decimal128Residue below)
@@ -88,8 +102,8 @@ internal static class Decimal128Rounder
     }
 
     /// <summary>
-    /// The residue of a part discarded whole from below half: below half when there is
-    /// anything in it or in the residue under it, and exact otherwise.
+    /// The residue when the whole value is discarded and lies below half. It is below half
+    /// if the value or the residue under it is non-zero, and exact otherwise.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static Decimal128Residue Whole(bool nonZero, Decimal128Residue below)
@@ -100,10 +114,12 @@ internal static class Decimal128Rounder
     }
 
     /// <summary>
-    /// The residue of one less the fraction a residue stands for, which is what subtracting
-    /// an inexact operand leaves: a part below half comes out above it, and a half stays a
-    /// half. Only the category matters, so no arithmetic is needed to flip it.
+    /// The residue of 1 minus the fraction a residue represents. Subtracting an inexact
+    /// operand leaves this: below half becomes above half, and half stays half. Only the
+    /// category matters, so no arithmetic is needed.
     /// </summary>
+    /// <param name="residue">The residue of the fraction.</param>
+    /// <returns>The residue of 1 minus the fraction.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Decimal128Residue Flip(Decimal128Residue residue)
     {
@@ -111,20 +127,24 @@ internal static class Decimal128Rounder
     }
 
     /// <summary>
-    /// Drops the last <paramref name="count"/> digits of a coefficient, folding them and any
-    /// residue already below them into a new residue. The count is at least one. A count
-    /// past the width of the coefficient discards everything, and everything is then below
-    /// half. Past one word's power the drop is two divisions, and the second's residue is
-    /// combined with the first's the way any later discard is combined with an older
-    /// residue.
+    /// Drops the last <paramref name="count"/> digits of a coefficient and folds them, with
+    /// any residue already below them, into a new residue. The count is at least 1. If the
+    /// count is more than the coefficient's digits, everything is discarded and the residue
+    /// is below half. A count above 19 takes two divisions. The second division's residue
+    /// is combined with the first's, like any later discard.
     /// </summary>
     /// <remarks>
-    /// A coefficient that fits one word is divided by a reciprocal, which is a multiply
-    /// and a shift; the branch that picks that path is decided by the data, but the path
-    /// saves far more than the branch costs. The second of the two divisions is a one-word
-    /// division too, since what is left above nineteen digits fits a word for any
-    /// coefficient the arithmetic forms.
+    /// A coefficient that fits in one word is divided with a reciprocal, which is a
+    /// multiply and a shift. The branch that chooses this path depends on the data, but the
+    /// path saves much more than the branch costs. The second of two divisions is also a
+    /// one-word division, because for every coefficient the arithmetic produces, what is
+    /// left above 19 digits fits in one word.
     /// </remarks>
+    /// <param name="coefficient">The coefficient to shorten.</param>
+    /// <param name="count">The number of digits to drop. It must be at least 1.</param>
+    /// <param name="below">The residue of digits discarded earlier, below the dropped digits.</param>
+    /// <param name="residue">Receives the residue of everything discarded.</param>
+    /// <returns>The kept digits.</returns>
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static Decimal128Integer DropDigits(Decimal128Integer coefficient, int count, Decimal128Residue below,
         out Decimal128Residue residue)
@@ -172,15 +192,21 @@ internal static class Decimal128Rounder
     }
 
     /// <summary>
-    /// Drops the last <paramref name="count"/> digits of a four-word value the same way. A
-    /// count past the width of four words discards everything.
+    /// Drops the last <paramref name="count"/> digits of a four-word value in the same way.
+    /// If the count is more than four words' digits, everything is discarded.
     /// </summary>
     /// <remarks>
-    /// A count of twenty or more is one three-by-two division by the widest power that
-    /// fits the count, when the quotient fits two words, which it does for every value
-    /// the arithmetic forms; whatever count is left then comes off that quotient. A
-    /// smaller count, or a value too wide for that, goes a word's power at a time.
+    /// For a count of 20 or more, it first does one 3-by-2 division by the largest power of
+    /// ten that fits the count, when the quotient fits in two words. That is true for every
+    /// value the arithmetic produces. Any remaining count is then dropped from the quotient.
+    /// A smaller count, or a value too wide for that division, is divided by 10^19 at a
+    /// time.
     /// </remarks>
+    /// <param name="value">The four-word value to shorten.</param>
+    /// <param name="count">The number of digits to drop. It must be at least 1.</param>
+    /// <param name="below">The residue of digits discarded earlier, below the dropped digits.</param>
+    /// <param name="residue">Receives the residue of everything discarded.</param>
+    /// <returns>The kept digits.</returns>
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static Decimal128LongInteger DropDigits(Decimal128LongInteger value, int count, Decimal128Residue below,
         out Decimal128Residue residue)
@@ -194,7 +220,7 @@ internal static class Decimal128Rounder
         if (count > Decimal128Tables.MaxPower)
         {
             var power = Math.Min(count, Decimal128Tables.MaxWidePower);
-            if (Decimal128Tables.TryDivRemWidePowerOfTen(value, power, out var kept, out var discarded))
+            if (Decimal128Tables.DivRemWidePowerOfTenIfFits(value, power, out var kept, out var discarded))
             {
                 residue = Combine(discarded, Decimal128Tables.WideHalfPowerOfTen(power), below);
                 var rest = count - power;
@@ -220,14 +246,19 @@ internal static class Decimal128Rounder
     }
 
     /// <summary>
-    /// Whether the last digit kept moves up under the rounding mode. An exact residue never
-    /// moves it, so the caller need not look at the residue first.
+    /// True if the rounding mode increments the last kept digit. An exact residue never
+    /// increments it, so the caller does not need to check the residue first.
     /// </summary>
     /// <remarks>
-    /// The half-even case, which is the default and so the common one, is bit operations
-    /// on the residue rather than comparisons: whether a residue is above half is decided
-    /// by the data.
+    /// The half-even case is the default and the most common. It uses bit operations on the
+    /// residue instead of comparisons, because whether a residue is above half depends on
+    /// the data.
     /// </remarks>
+    /// <param name="coefficient">The kept digits.</param>
+    /// <param name="residue">The residue of the discarded digits.</param>
+    /// <param name="negative">Whether the value is negative.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <returns>True if the coefficient must be incremented.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool ShouldIncrement(Decimal128Integer coefficient, Decimal128Residue residue, bool negative,
         Decimal128Rounding rounding)
@@ -254,8 +285,8 @@ internal static class Decimal128Rounder
             case Decimal128Rounding.Floor:
                 return inexact & negative;
             default:
-                // ZeroFiveUp keeps the discarded part recoverable by a later rounding: it
-                // only moves the last digit when that digit is a 0 or a 5.
+                // ZeroFiveUp increments only when the last kept digit is 0 or 5. This keeps
+                // the result correct if it is rounded again later.
                 var last = coefficient.LastDigit();
                 return inexact & ((last == 0) | (last == 5));
         }

@@ -6,35 +6,42 @@ using System.Runtime.CompilerServices;
 namespace Decimals.Internal;
 
 /// <summary>
-/// Rounding the exact product of two coefficients, held in four words, and the fused
-/// multiply-add built on it.
+/// Rounds the exact four-word product of two coefficients, and implements the fused
+/// multiply-add on top of it.
 /// </summary>
 /// <remarks>
 /// <para>
-/// A product of two thirty-four digit coefficients runs to sixty-eight digits, which four
-/// words hold exactly. Rounding it to the format is a division by a power of ten, done a
-/// word at a time from the top by <see cref="Decimal128Tables"/>, with what falls off
-/// becoming the residue.
+/// Two 34-digit coefficients multiply to at most 68 digits, which four words hold exactly.
+/// Rounding the product to the format is a division by a power of ten. <see cref="Decimal128Tables"/>
+/// divides one word at a time from the top, and the discarded digits become the residue.
 /// </para>
 /// <para>
-/// The fused multiply-add keeps the product exact and folds only the addend, or keeps both
-/// exact in four words when the addend reaches into the product's digits, or widens the
-/// addend and folds the product when the addend sits far above it. Either way one inexact
-/// quantity at most reaches the rounding, which is what a residue can carry correctly.
+/// The fused multiply-add has three cases. The product stays exact and only the addend is
+/// folded. Or both stay exact in four words, when the addend overlaps the product's
+/// digits. Or the addend is far above, so it is widened and the product is folded below
+/// it. In every case, at most one inexact value reaches the rounding, which is what a
+/// residue can handle correctly.
 /// </para>
 /// </remarks>
 internal static class Decimal128Product
 {
     /// <summary>
-    /// Digits a scaled addend may run to and still be added to the product exactly: the
-    /// product's sixty-eight and one more, which four words still hold beside it.
+    /// The largest number of digits a scaled addend can have and still be added to the
+    /// product exactly: the product's 68 digits plus one. Four words still hold the sum.
     /// </summary>
     private const int ExactDigits = 69;
 
     /// <summary>
-    /// Rounds a four-word value into the format. Digits past the precision come off from
-    /// the bottom, whether or not they are zero, and are the residue.
+    /// Rounds a four-word value to the format. Digits beyond the precision are discarded
+    /// from the bottom, even if they are zero, and become the residue.
     /// </summary>
+    /// <param name="negative">Whether the value is negative.</param>
+    /// <param name="value">The exact four-word value, such as a product of two coefficients.</param>
+    /// <param name="exponent">The value's exponent.</param>
+    /// <param name="residue">The residue of any digits already discarded below <paramref name="value"/>.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the rounding raises.</param>
+    /// <returns>The encoded, rounded value.</returns>
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static Decimal128Integer Reduce(bool negative, Decimal128LongInteger value, int exponent,
         Decimal128Residue residue, Decimal128Rounding rounding, ref Decimal128Status status)
@@ -45,8 +52,7 @@ internal static class Decimal128Product
             return Decimal128Finalizer.Finalize(negative, value.ToInteger(), exponent, residue, rounding, ref status);
         }
 
-        // Digits are discarded here, whether or not they are zero, and the specification
-        // counts that as rounding.
+        // The specification counts discarding digits as rounding, even if they are zero.
         status |= Decimal128Status.Rounded;
 
         var drop = digits - Decimal128Encoding.Precision;
@@ -55,9 +61,18 @@ internal static class Decimal128Product
     }
 
     /// <summary>
-    /// Adds an addend to an exact product, rounding once. Which of the two operands gets
-    /// folded, if either, depends on where the addend sits against the product.
+    /// Adds an addend to an exact product, with a single rounding. Which operand is folded,
+    /// if either, depends on the addend's position relative to the product.
     /// </summary>
+    /// <param name="productNegative">Whether the product is negative.</param>
+    /// <param name="product">The exact product, in four words.</param>
+    /// <param name="productExponent">The product's exponent.</param>
+    /// <param name="addendNegative">Whether the addend is negative.</param>
+    /// <param name="addend">The addend's coefficient.</param>
+    /// <param name="addendExponent">The addend's exponent.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded sum, rounded once.</returns>
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static Decimal128Integer FusedAdd(bool productNegative, Decimal128LongInteger product, int productExponent,
         bool addendNegative, Decimal128Integer addend, int addendExponent, Decimal128Rounding rounding,
@@ -88,11 +103,10 @@ internal static class Decimal128Product
     }
 
     /// <summary>
-    /// The addend's exponent lies below the product's: the addend is folded up to the
-    /// product's exponent, its discarded digits become the residue, and the sum or
-    /// difference is formed exactly on top. The product is never zero here, but it can
-    /// be the smaller of the two, in which case the difference takes the addend's sign and
-    /// the residue stands as it is.
+    /// The addend's exponent is below the product's. The addend is folded to the product's
+    /// exponent, its discarded digits become the residue, and the sum or difference is
+    /// computed exactly. The product is never zero here, but it can be smaller than the
+    /// addend. Then the difference takes the addend's sign and the residue is unchanged.
     /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static Decimal128Integer AddBelow(bool productNegative, Decimal128LongInteger product, int productExponent,
@@ -124,9 +138,8 @@ internal static class Decimal128Product
         var comparison = product.CompareTo(wideFolded);
         if (comparison > 0)
         {
-            // Subtracting an inexact operand: the whole units come off, one more unit
-            // comes off for the fraction, and the fraction's residue flips to what is
-            // left of that unit.
+            // Subtracting an inexact operand: subtract the whole units, then one more unit
+            // for the fraction. The residue is flipped to describe what remains of that unit.
             var difference = product - wideFolded;
             if (residue != Decimal128Residue.Exact)
             {
@@ -139,28 +152,28 @@ internal static class Decimal128Product
 
         if (comparison < 0)
         {
-            // The addend is the larger, so the fraction below its folded units is still
-            // added rather than taken away, and the residue stands.
+            // The addend is larger, so its fraction below the folded units is still added,
+            // not subtracted, and the residue is unchanged.
             return Decimal128Finalizer.Finalize(addendNegative, folded - product.ToInteger(), productExponent,
                 residue, rounding, ref status);
         }
 
         if (residue == Decimal128Residue.Exact)
         {
-            // Opposite signs canceling exactly gives a positive zero, except when the
-            // rounding runs toward negative infinity.
+            // Opposite signs that cancel exactly give positive zero, except when rounding
+            // toward negative infinity.
             return Decimal128Finalizer.Zero(rounding == Decimal128Rounding.Floor, addendExponent, ref status);
         }
 
-        // The units cancel and only the addend's discarded digits are left, which are an
-        // exact value at the addend's own exponent.
+        // The units cancel, and only the addend's discarded digits remain. They are an
+        // exact value at the addend's exponent.
         return Decimal128Finalizer.Finalize(addendNegative, discarded, addendExponent, Decimal128Residue.Exact,
             rounding, ref status);
     }
 
     /// <summary>
-    /// The addend, scaled to the product's exponent, fits four words beside the product:
-    /// the sum or difference is formed exactly and rounded once.
+    /// The addend, scaled to the product's exponent, fits in four words with the product.
+    /// The sum or difference is computed exactly and rounded once.
     /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static Decimal128Integer AddExact(bool productNegative, Decimal128LongInteger product, int exponent,
@@ -189,10 +202,9 @@ internal static class Decimal128Product
     }
 
     /// <summary>
-    /// The addend's last digit sits far enough above the product that, once the addend is
-    /// widened to thirty-eight digits, the product folded under it has at most thirty-six:
-    /// nothing can cancel down into the fold, so the product's discarded digits are the
-    /// residue.
+    /// The addend's last digit is far enough above the product that, after the addend is
+    /// widened to 38 digits, the product folded below it has at most 36 digits. Nothing can
+    /// cancel into the folded part, so the product's discarded digits are the residue.
     /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static Decimal128Integer AddAbove(bool productNegative, Decimal128LongInteger product, int productExponent,

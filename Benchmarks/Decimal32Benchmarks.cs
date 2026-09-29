@@ -6,9 +6,9 @@ using BenchmarkDotNet.Attributes;
 namespace Decimals.Benchmarks;
 
 /// <summary>
-/// <see cref="Decimal32"/> on the short operand set: decbench's shape at seven digits. The
-/// two wide text rows run on decbench's own sixteen-digit strings, which round on the way
-/// in, since that is the set its decSingle text figures are measured on.
+/// Times <see cref="Decimal32"/> on the short operand set, which has decbench's shape at 7
+/// digits. The two wide text benchmarks use decbench's own 16-digit strings, which round
+/// when parsed. decbench measures its decSingle text rows on those strings.
 /// </summary>
 public class Decimal32Benchmarks
 {

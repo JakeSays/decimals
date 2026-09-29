@@ -4,23 +4,22 @@
 namespace Decimals.Internal;
 
 /// <summary>
-/// The densely-packed-decimal interchange encoding: the bits decNumber writes, the bits the
-/// testcase corpus lists, and the bits decimal hardware consumes. A <see cref="Decimal32"/>
-/// holds the binary-integer form, so this is a conversion at the boundary rather than
-/// anything arithmetic touches.
+/// Converts to and from the DPD encoding. DPD is what decNumber writes, what the test
+/// corpus lists, and what decimal hardware uses. A <see cref="Decimal32"/> stores BID, so
+/// DPD is only a conversion at the boundary. The arithmetic never uses it.
 /// </summary>
 /// <remarks>
 /// <para>
-/// The layout is a sign bit, a five-bit combination field carrying the exponent's top two
-/// bits and the leading coefficient digit, a six-bit exponent continuation, and the
-/// remaining six digits as two ten-bit declets.
+/// The layout is: a sign bit; a 5-bit combination field holding the exponent's top 2 bits
+/// and the leading coefficient digit; a 6-bit exponent continuation; and the remaining 6
+/// digits as two 10-bit declets.
 /// </para>
 /// <para>
-/// A declet is packed and unpacked by the bit rules of IEEE 754-2019 section 3.5.2 rather
-/// than by a table: the conversion is not on any hot path, and the rules are a few dozen
-/// operations. Twenty-four of the thousand and twenty-four declets are non-canonical -- they
-/// carry three digits another declet also carries -- and unpacking accepts them while
-/// packing always produces the canonical one.
+/// Declets are packed and unpacked with the bit rules of IEEE 754-2019 section 3.5.2, not
+/// with a table. The conversion is not on a hot path, and the rules take a few dozen
+/// operations. 24 of the 1024 declets are non-canonical: they encode the same three digits
+/// as another declet. Unpacking accepts them, and packing always produces the canonical
+/// one.
 /// </para>
 /// </remarks>
 internal static class Decimal32Dpd
@@ -37,7 +36,9 @@ internal static class Decimal32Dpd
 
     private const uint DecletMask = 0x3FF;
 
-    /// <summary>Reads the interchange form into the binary-integer form.</summary>
+    /// <summary>Converts DPD bits to BID bits.</summary>
+    /// <param name="bits">The DPD encoding.</param>
+    /// <returns>The canonical BID encoding of the same value.</returns>
     public static uint FromDpd(uint bits)
     {
         var negative = (bits >> 31) != 0;
@@ -51,8 +52,8 @@ internal static class Decimal32Dpd
                 return Decimal32Encoding.Infinity(negative);
             }
 
-            // The bit directly below the combination field separates the two NaNs; the rest
-            // of the continuation carries nothing.
+            // The bit just below the combination field tells the two NaNs apart. The rest of
+            // the continuation is unused.
             var signaling = (continuation >> (ContinuationBits - 1)) != 0;
             return Decimal32Encoding.NaN(negative, signaling, ReadDeclets(bits, 0));
         }
@@ -74,7 +75,9 @@ internal static class Decimal32Dpd
         return Decimal32Encoding.Pack(negative, exponent, ReadDeclets(bits, leadingDigit));
     }
 
-    /// <summary>Writes the binary-integer form out as the interchange form.</summary>
+    /// <summary>Converts BID bits to DPD bits.</summary>
+    /// <param name="bits">The BID encoding.</param>
+    /// <returns>The canonical DPD encoding of the same value.</returns>
     public static uint ToDpd(uint bits)
     {
         var sign = bits & Decimal32Encoding.SignMask;
@@ -134,9 +137,9 @@ internal static class Decimal32Dpd
     }
 
     /// <summary>
-    /// Three digits from a declet, by the rules of the standard. The declet's bits are
-    /// named p through y from the top; v says whether any digit is large, and w and x say
-    /// which, with s and t deciding among the three-large cases.
+    /// Decodes a declet to three digits, using the rules in the standard. The declet's bits
+    /// are named p through y from the top. v says whether any digit is large (8 or 9). w and
+    /// x say which one. s and t decide among the cases with more than one large digit.
     /// </summary>
     private static uint Unpack(uint declet)
     {
@@ -208,8 +211,8 @@ internal static class Decimal32Dpd
     }
 
     /// <summary>
-    /// The canonical declet for a value from 0 through 999. Each digit's top bit says
-    /// whether it is large, and the eight combinations of those bits select the layout.
+    /// The canonical declet for a value from 0 to 999. Each digit's top bit says whether it
+    /// is large (8 or 9). The eight combinations of those bits select the layout.
     /// </summary>
     private static uint Pack(uint value)
     {

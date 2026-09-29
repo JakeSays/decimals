@@ -7,22 +7,22 @@ using System.Runtime.CompilerServices;
 namespace Decimals.Internal;
 
 /// <summary>
-/// The exact product of two coefficients, held as two limbs of sixteen digits, and the
-/// fused multiply-add built on it.
+/// The exact product of two coefficients, held as two base-10^16 limbs, and the fused
+/// multiply-add built on it.
 /// </summary>
 /// <remarks>
 /// <para>
 /// A binary 128-bit product would need a 128-bit division to round, and there is no such
-/// instruction. Splitting each coefficient into two halves of eight digits instead gives
-/// four small products that recombine into base 10^16 with nothing but 64-bit multiplies
-/// and one constant division, and a limb of sixteen digits is exactly what rounding wants:
-/// the high limb's digit count is the number of digits to drop.
+/// instruction. Instead, each coefficient is split into two 8-digit halves. The four small
+/// products combine into base 10^16 using only 64-bit multiplies and one division by a
+/// constant. A 16-digit limb is what rounding needs: the number of digits in the high limb
+/// is the number of digits to drop.
 /// </para>
 /// <para>
-/// The fused multiply-add keeps the product exact and folds only the addend, or keeps both
-/// exact in three limbs when their leading digits are close enough for the subtraction to
-/// cancel. Either way one inexact quantity at most reaches the rounding, which is what a
-/// residue can carry correctly.
+/// The fused multiply-add keeps the product exact and folds only the addend. When the
+/// leading digits of the product and addend are close enough to cancel in a subtraction,
+/// it keeps both exact in three limbs. Either way, at most one inexact value reaches the
+/// rounding, which is what a residue can handle correctly.
 /// </para>
 /// </remarks>
 internal static class Decimal64Product
@@ -32,9 +32,12 @@ internal static class Decimal64Product
     private const ulong HalfSplit = 100000000;
 
     /// <summary>
-    /// Multiplies two coefficients of at most sixteen digits into a high and a low limb of
-    /// base 10^16.
+    /// Multiplies two coefficients of up to 16 digits into a high and a low base-10^16 limb.
     /// </summary>
+    /// <param name="left">The first coefficient, below 10^16.</param>
+    /// <param name="right">The second coefficient, below 10^16.</param>
+    /// <param name="high">Receives the product divided by 10^16.</param>
+    /// <param name="low">Receives the product modulo 10^16.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void Multiply(ulong left, ulong right, out ulong high, out ulong low)
     {
@@ -62,9 +65,16 @@ internal static class Decimal64Product
     }
 
     /// <summary>
-    /// Rounds a two-limb product into the format. The high limb's digit count is what has to
-    /// come off the low limb, and those digits are the residue.
+    /// Rounds a two-limb product into the format. The number of digits in the high limb is
+    /// the number of digits to drop from the low limb. The dropped digits become the residue.
     /// </summary>
+    /// <param name="negative">Whether the product is negative.</param>
+    /// <param name="high">The product divided by 10^16.</param>
+    /// <param name="low">The product modulo 10^16.</param>
+    /// <param name="exponent">The product's exponent.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the rounding raises.</param>
+    /// <returns>The encoded, rounded product.</returns>
     public static ulong Reduce(bool negative, ulong high, ulong low, int exponent,
         Decimal64Rounding rounding, ref Decimal64Status status)
     {
@@ -73,8 +83,8 @@ internal static class Decimal64Product
             return Decimal64Finalizer.Finalize(negative, low, exponent, Decimal64Residue.Exact, rounding, ref status);
         }
 
-        // Digits are discarded here, whether or not they are zero, and the specification
-        // counts that as rounding.
+        // Digits are discarded here. The specification counts that as rounding, even if
+        // the digits are zero.
         status |= Decimal64Status.Rounded;
 
         var drop = Decimal64Tables.CountDigits(high);
@@ -86,10 +96,20 @@ internal static class Decimal64Product
     }
 
     /// <summary>
-    /// Adds an addend to a product too wide for one word, rounding once. The product is
-    /// exact in its two limbs; which of the two operands gets folded, if either, depends on
-    /// where the addend sits against it.
+    /// Adds an addend to a product that is too wide for one word, with a single rounding.
+    /// The product is exact in its two limbs. Which operand is folded, if either, depends
+    /// on the addend's position relative to the product.
     /// </summary>
+    /// <param name="productNegative">Whether the product is negative.</param>
+    /// <param name="high">The product divided by 10^16. It is not zero.</param>
+    /// <param name="low">The product modulo 10^16.</param>
+    /// <param name="productExponent">The product's exponent.</param>
+    /// <param name="addendNegative">Whether the addend is negative.</param>
+    /// <param name="addend">The addend's coefficient.</param>
+    /// <param name="addendExponent">The addend's exponent.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded sum, rounded once.</returns>
     public static ulong FusedAdd(bool productNegative, ulong high, ulong low, int productExponent,
         bool addendNegative, ulong addend, int addendExponent, Decimal64Rounding rounding,
         ref Decimal64Status status)
@@ -119,14 +139,15 @@ internal static class Decimal64Product
     }
 
     /// <summary>
-    /// The addend lies below the product's last digit, and so cannot cancel it: the addend
-    /// is folded to the product's exponent and its discarded digits become the residue.
+    /// The addend is below the product's last digit, so it cannot cancel the product. The
+    /// addend is folded to the product's exponent, and its discarded digits become the
+    /// residue.
     /// </summary>
     private static ulong AddBelow(bool productNegative, ulong high, ulong low, int exponent,
         bool addendNegative, ulong addend, int drop, Decimal64Rounding rounding, ref Decimal64Status status)
     {
-        // The exact sum reaches down to the addend's last digit, below a product already
-        // wider than the format, so digits are discarded whatever they hold.
+        // The exact sum extends down to the addend's last digit, below a product that is
+        // already wider than the format. So digits are discarded, whatever their values.
         status |= Decimal64Status.Rounded;
 
         ulong folded;
@@ -161,8 +182,8 @@ internal static class Decimal64Product
             return ReduceLimbs(productNegative, top, high, low, exponent, residue, rounding, ref status);
         }
 
-        // Subtracting an inexact operand: the whole units come off, one more unit comes off
-        // for the fraction, and the fraction's residue flips to what is left of that unit.
+        // Subtracting an inexact operand: subtract the whole units, then one more unit for
+        // the fraction. The residue is flipped to describe what remains of that unit.
         if (residue != Decimal64Residue.Exact)
         {
             folded++;
@@ -183,8 +204,8 @@ internal static class Decimal64Product
     }
 
     /// <summary>
-    /// The addend, scaled to the product's exponent, fits three limbs: the sum or
-    /// difference is formed exactly and rounded once.
+    /// The addend, scaled to the product's exponent, fits in three limbs. The sum or
+    /// difference is computed exactly and rounded once.
     /// </summary>
     private static ulong AddExact(bool productNegative, ulong high, ulong low, int exponent,
         bool addendNegative, ulong addend, int shift, Decimal64Rounding rounding, ref Decimal64Status status)
@@ -201,8 +222,8 @@ internal static class Decimal64Product
         var comparison = Compare(0, high, low, addendTop, addendHigh, addendLow);
         if (comparison == 0)
         {
-            // Opposite signs canceling exactly gives a positive zero, except when the
-            // rounding runs toward negative infinity.
+            // Opposite signs that cancel exactly give positive zero, except when rounding
+            // toward negative infinity.
             return Decimal64Finalizer.Zero(rounding == Decimal64Rounding.Floor, exponent, ref status);
         }
 
@@ -223,8 +244,8 @@ internal static class Decimal64Product
     }
 
     /// <summary>
-    /// The addend's leading digit sits at least two places above the product's, so nothing
-    /// can cancel: the addend is widened to nineteen digits and the product folded under it.
+    /// The addend's leading digit is at least two places above the product's, so nothing
+    /// can cancel. The addend is widened to 19 digits and the product is folded below it.
     /// </summary>
     private static ulong AddAbove(bool productNegative, ulong high, ulong low, int productExponent,
         bool addendNegative, ulong addend, int addendDigits, int addendExponent,
@@ -251,8 +272,8 @@ internal static class Decimal64Product
     }
 
     /// <summary>
-    /// The product divided by ten to <paramref name="shift"/>, which is at least fifteen,
-    /// with what falls off as the residue.
+    /// The product divided by 10 to the power <paramref name="shift"/>, which is at least 15.
+    /// The discarded part becomes the residue.
     /// </summary>
     private static ulong Fold(ulong high, ulong low, int shift, out Decimal64Residue residue)
     {
@@ -276,8 +297,8 @@ internal static class Decimal64Product
             return high;
         }
 
-        // The discarded part is the dropped digits of the high limb over the whole low
-        // limb, against a halfway point that lies entirely within the high limb's part.
+        // The discarded part is the dropped digits of the high limb followed by the whole low
+        // limb. The halfway point falls entirely within the high limb's dropped digits.
         var quotient = Decimal64Tables.DivRemPowerOfTen(high, drop, out var droppedHigh);
         var halfHigh = Decimal64Tables.HalfPowerOfTen(drop);
 
@@ -298,7 +319,7 @@ internal static class Decimal64Product
     }
 
     /// <summary>
-    /// A coefficient times ten to <paramref name="shift"/>, which is at most thirty-two, as
+    /// A coefficient times 10 to the power <paramref name="shift"/>, which is at most 32, as
     /// three limbs.
     /// </summary>
     private static void ScaleToLimbs(ulong value, int shift, out ulong top, out ulong high, out ulong low)
@@ -398,9 +419,9 @@ internal static class Decimal64Product
     }
 
     /// <summary>
-    /// Brings a value of up to three limbs down to at most nineteen digits and a residue,
-    /// then finalizes it. The top limb never exceeds two digits: it comes from a carry, or
-    /// from an addend scaled to at most thirty-three digits.
+    /// Reduces a value of up to three limbs to at most 19 digits and a residue, then
+    /// finalizes it. The top limb never has more than two digits, because it comes from a
+    /// carry or from an addend scaled to at most 33 digits.
     /// </summary>
     private static ulong ReduceLimbs(bool negative, ulong top, ulong high, ulong low, int exponent,
         Decimal64Residue residue, Decimal64Rounding rounding, ref Decimal64Status status)

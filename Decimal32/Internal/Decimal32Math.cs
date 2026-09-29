@@ -4,29 +4,30 @@
 namespace Decimals.Internal;
 
 /// <summary>
-/// The elementary functions beyond the square root.
+/// The elementary functions other than the square root.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Exp, ln, log10, and power cannot work on the format's own coefficient: exp evaluates its
-/// series into an accumulator twice the working precision, ln calls exp from inside a
-/// Newton iteration carried out wider still, and power calls ln. So they work on
-/// <see cref="Decimal32WideNumber"/> and are ports of decNumber's decExpOp, decLnOp,
-/// decNumberLog10, and decNumberPower, with the same intermediate precisions -- which is
-/// what makes their results the reference's, digit for digit.
+/// Exp, ln, log10, and power cannot work on the format's own coefficient. Exp evaluates
+/// its series in an accumulator of twice the working precision, ln calls exp inside a
+/// Newton iteration at an even wider precision, and power calls ln. So they work on
+/// <see cref="Decimal32WideNumber"/>. They are ports of decNumber's decExpOp, decLnOp,
+/// decNumberLog10, and decNumberPower, with the same intermediate precisions, so their
+/// results match the reference digit for digit.
 /// </para>
 /// <para>
-/// decNumber declares its temporaries as locals sized from the widest case. Here an entry
-/// point stack-allocates one block and the functions draw slots from it through
-/// <see cref="Decimal32WideArena"/>, which is the same arrangement with the sizes in one place.
+/// decNumber declares its temporaries as locals sized for the widest case. Here an entry
+/// point allocates one block on the stack, and the functions take slots from it through
+/// <see cref="Decimal32WideArena"/>. The arrangement is the same, with the sizes in one
+/// place.
 /// </para>
 /// </remarks>
 internal static unsafe class Decimal32Math
 {
     /// <summary>
-    /// decNumber's LNnn: an initial estimate of ln(f) for a coefficient truncated to two
-    /// digits, 0.10 through 0.99. Each entry packs a four-digit coefficient in the top 14
-    /// bits and a two-bit exponent code, giving the value -c * 10**(-e-3).
+    /// decNumber's LNnn table: an initial estimate of ln(f) for a coefficient truncated to
+    /// two digits, 0.10 through 0.99. Each entry packs a four-digit coefficient in the top
+    /// 14 bits and a two-bit exponent code, and represents -c * 10^(-e-3).
     /// </summary>
     private static ReadOnlySpan<ushort> NaturalLogEstimates =>
     [
@@ -42,9 +43,13 @@ internal static unsafe class Decimal32Math
     ];
 
     /// <summary>
-    /// e raised to the value. Finite results are always full precision and inexact, except
-    /// for the two that are not approximations: exp(0) is 1 and exp(-Infinity) is 0.
+    /// e raised to the value. A finite result always has full precision and is inexact,
+    /// except in two exact cases: exp(0) is 1 and exp(-Infinity) is 0.
     /// </summary>
+    /// <param name="value">The encoded exponent.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded result, rounded to the format.</returns>
     public static uint Exp(uint value, Decimal32Rounding rounding, ref Decimal32Status status)
     {
         if (Decimal32Encoding.IsNaN(value))
@@ -61,9 +66,13 @@ internal static unsafe class Decimal32Math
     }
 
     /// <summary>
-    /// The natural logarithm. Zero gives -Infinity, a negative is invalid, and ln(1) is an
-    /// exact zero.
+    /// The natural logarithm. Zero gives -Infinity, a negative value is invalid, and ln(1)
+    /// is an exact zero.
     /// </summary>
+    /// <param name="value">The encoded operand.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded result, rounded to the format.</returns>
     public static uint Log(uint value, Decimal32Rounding rounding, ref Decimal32Status status)
     {
         if (Decimal32Encoding.IsNaN(value))
@@ -80,8 +89,13 @@ internal static unsafe class Decimal32Math
     }
 
     /// <summary>
-    /// The base-ten logarithm, as ln(x)/ln(10). A power of ten gives its exponent exactly.
+    /// The base-10 logarithm, computed as ln(x)/ln(10). A power of ten gives its exponent
+    /// exactly.
     /// </summary>
+    /// <param name="value">The encoded operand.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded result, rounded to the format.</returns>
     public static uint Log10(uint value, Decimal32Rounding rounding, ref Decimal32Status status)
     {
         if (Decimal32Encoding.IsNaN(value))
@@ -99,8 +113,8 @@ internal static unsafe class Decimal32Math
 
     /// <summary>
     /// Brings a logarithm's result into the format's exponent range. The divisions that
-    /// produce one run over the wider mathematical range, and a degenerate base -- zero, or
-    /// an infinity -- leaves a zero at an exponent no encoding can carry.
+    /// compute it use the wider mathematical range, and a degenerate base (zero or an
+    /// infinity) can leave a zero with an exponent no encoding can represent.
     /// </summary>
     private static uint Settle(ref Decimal32WideArena arena, Decimal32WideNumber value, Decimal32WideContext set,
         ref Decimal32Status status)
@@ -109,9 +123,15 @@ internal static unsafe class Decimal32Math
     }
 
     /// <summary>
-    /// The left operand raised to the right. An integer exponent that fits is applied by
-    /// repeated squaring, which can be exact; anything else goes through exp(ln(x)*y).
+    /// The left operand raised to the power of the right operand. An integer exponent that
+    /// fits is applied by repeated squaring, which can be exact. Any other exponent uses
+    /// exp(ln(x) * y).
     /// </summary>
+    /// <param name="left">The encoded base.</param>
+    /// <param name="right">The encoded exponent.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded result, rounded to the format.</returns>
     public static uint Power(uint left, uint right, Decimal32Rounding rounding, ref Decimal32Status status)
     {
         if (Decimal32Encoding.IsNaN(left) || Decimal32Encoding.IsNaN(right))
@@ -128,23 +148,35 @@ internal static unsafe class Decimal32Math
         return PowerCore(ref arena, baseValue, exponent, set, ref status).ToBits();
     }
 
-    /// <summary>Two raised to the value.</summary>
+    /// <summary>2 raised to the value.</summary>
+    /// <param name="value">The encoded exponent.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded result, rounded to the format.</returns>
     public static uint Exp2(uint value, Decimal32Rounding rounding, ref Decimal32Status status)
     {
         return RaiseWholeBase(2, value, rounding, ref status);
     }
 
-    /// <summary>Ten raised to the value.</summary>
+    /// <summary>10 raised to the value.</summary>
+    /// <param name="value">The encoded exponent.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded result, rounded to the format.</returns>
     public static uint Exp10(uint value, Decimal32Rounding rounding, ref Decimal32Status status)
     {
         return RaiseWholeBase(10, value, rounding, ref status);
     }
 
     /// <summary>
-    /// e raised to the value, less one. Near zero the result is about the operand itself,
-    /// so the subtraction cancels the leading digits away; the evaluation is widened by as
-    /// many digits as the cancellation costs.
+    /// e raised to the value, minus one. Near zero the result is close to the operand
+    /// itself, so the subtraction cancels the leading digits. The evaluation is widened by
+    /// as many digits as the cancellation removes.
     /// </summary>
+    /// <param name="value">The encoded exponent.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded result, rounded to the format.</returns>
     public static uint ExpMinusOne(uint value, Decimal32Rounding rounding, ref Decimal32Status status)
     {
         if (Decimal32Encoding.IsNaN(value))
@@ -169,8 +201,8 @@ internal static unsafe class Decimal32Math
         var lost = LeadingDigitsLost(x);
         if (lost > Decimal32Encoding.Precision + 3)
         {
-            // The x**2/2 term lies entirely below the last digit kept, so the result is the
-            // operand with a residue away from zero, that term carrying the operand's sign.
+            // The x^2/2 term is entirely below the last digit kept, so the result is the
+            // operand with a residue away from zero. The term has the operand's sign.
             return RoundWithResidue(ref arena, x, x.IsNegative ? -1 : 1, rounding, ref status);
         }
 
@@ -182,22 +214,34 @@ internal static unsafe class Decimal32Math
         return Finish(ref arena, result, wideStatus, rounding, ref status);
     }
 
-    /// <summary>Two raised to the value, less one.</summary>
+    /// <summary>2 raised to the value, minus one.</summary>
+    /// <param name="value">The encoded exponent.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded result, rounded to the format.</returns>
     public static uint Exp2MinusOne(uint value, Decimal32Rounding rounding, ref Decimal32Status status)
     {
         return RaiseWholeBaseMinusOne(2, value, rounding, ref status);
     }
 
-    /// <summary>Ten raised to the value, less one.</summary>
+    /// <summary>10 raised to the value, minus one.</summary>
+    /// <param name="value">The encoded exponent.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded result, rounded to the format.</returns>
     public static uint Exp10MinusOne(uint value, Decimal32Rounding rounding, ref Decimal32Status status)
     {
         return RaiseWholeBaseMinusOne(10, value, rounding, ref status);
     }
 
     /// <summary>
-    /// The base-two logarithm. A power of two gives its exponent exactly, the way a power
-    /// of ten does for <see cref="Log10"/>.
+    /// The base-2 logarithm. A power of two gives its exponent exactly, as a power of ten
+    /// does for <see cref="Log10"/>.
     /// </summary>
+    /// <param name="value">The encoded operand.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded result, rounded to the format.</returns>
     public static uint Log2(uint value, Decimal32Rounding rounding, ref Decimal32Status status)
     {
         if (Decimal32Encoding.IsNaN(value))
@@ -214,9 +258,14 @@ internal static unsafe class Decimal32Math
     }
 
     /// <summary>
-    /// The logarithm in an arbitrary base. Two and ten go through their own routines, which
-    /// have exact cases worth keeping.
+    /// The logarithm in an arbitrary base. Bases 2 and 10 use their own methods, which keep
+    /// their exact cases.
     /// </summary>
+    /// <param name="value">The encoded operand.</param>
+    /// <param name="newBase">The encoded base of the logarithm.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded result, rounded to the format.</returns>
     public static uint LogInBase(uint value, uint newBase, Decimal32Rounding rounding, ref Decimal32Status status)
     {
         if (Decimal32Encoding.IsNaN(value) || Decimal32Encoding.IsNaN(newBase))
@@ -240,7 +289,7 @@ internal static unsafe class Decimal32Math
             return Settle(ref arena, BaseTwoLog(ref arena, x, set, ref status), set, ref status);
         }
 
-        if (TryLogarithmOfSpecial(ref arena, x, ref status, out var special))
+        if (LogarithmOfSpecial(ref arena, x, ref status) is { } special)
         {
             return special.ToBits();
         }
@@ -249,9 +298,13 @@ internal static unsafe class Decimal32Math
     }
 
     /// <summary>
-    /// The natural logarithm of one plus the value. For a small operand the sum would round
-    /// straight back to one, so it is formed at enough digits to keep the operand whole.
+    /// The natural logarithm of one plus the value. For a small operand, the sum would round
+    /// back to exactly one, so it is computed with enough digits to keep the whole operand.
     /// </summary>
+    /// <param name="value">The encoded operand.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded result, rounded to the format.</returns>
     public static uint LogPlusOne(uint value, Decimal32Rounding rounding, ref Decimal32Status status)
     {
         if (Decimal32Encoding.IsNaN(value))
@@ -281,8 +334,8 @@ internal static unsafe class Decimal32Math
         var lost = LeadingDigitsLost(x);
         if (lost > Decimal32Encoding.Precision + 3)
         {
-            // ln(1+x) is x less x**2/2, and that term lies below the last digit kept, so
-            // the residue runs toward zero.
+            // ln(1+x) is x minus x^2/2, and that term is below the last digit kept, so the
+            // residue is toward zero.
             return RoundWithResidue(ref arena, x, x.IsNegative ? 1 : -1, rounding, ref status);
         }
 
@@ -293,28 +346,46 @@ internal static unsafe class Decimal32Math
         return Finish(ref arena, result, wideStatus, rounding, ref status);
     }
 
-    /// <summary>The base-two logarithm of one plus the value.</summary>
+    /// <summary>The base-2 logarithm of one plus the value.</summary>
+    /// <param name="value">The encoded operand.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded result, rounded to the format.</returns>
     public static uint Log2PlusOne(uint value, Decimal32Rounding rounding, ref Decimal32Status status)
     {
         return LogPlusOneInWholeBase(2, value, rounding, ref status);
     }
 
-    /// <summary>The base-ten logarithm of one plus the value.</summary>
+    /// <summary>The base-10 logarithm of one plus the value.</summary>
+    /// <param name="value">The encoded operand.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded result, rounded to the format.</returns>
     public static uint Log10PlusOne(uint value, Decimal32Rounding rounding, ref Decimal32Status status)
     {
         return LogPlusOneInWholeBase(10, value, rounding, ref status);
     }
 
     /// <summary>The cube root.</summary>
+    /// <param name="value">The encoded operand. It can be negative.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded result, rounded to the format.</returns>
     public static uint Cbrt(uint value, Decimal32Rounding rounding, ref Decimal32Status status)
     {
         return RootN(value, 3, rounding, ref status);
     }
 
     /// <summary>
-    /// The degree-th root, as exp(ln(x)/degree). A root that comes out exact is returned as
-    /// such: the rounded root is raised back to the degree and compared with the operand.
+    /// The root of the given degree, computed as exp(ln(x)/degree). An exact root is
+    /// returned as exact: the rounded root is raised back to the degree and compared with
+    /// the operand.
     /// </summary>
+    /// <param name="value">The encoded operand.</param>
+    /// <param name="degree">The degree of the root. A negative degree gives the reciprocal of the root.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded result, rounded to the format, or a quiet NaN for an even root of a negative value.</returns>
     public static uint RootN(uint value, int degree, Decimal32Rounding rounding, ref Decimal32Status status)
     {
         if (Decimal32Encoding.IsNaN(value))
@@ -334,8 +405,8 @@ internal static unsafe class Decimal32Math
 
         if (x.IsZero)
         {
-            // A zero keeps its sign through any root; a negative degree sends it to an
-            // infinity of that same sign.
+            // A zero keeps its sign through any root. A negative degree gives an infinity of
+            // the same sign.
             return degree < 0
                 ? Decimal32Encoding.Infinity(x.IsNegative)
                 : Decimal32Encoding.Canonical(value);
@@ -343,7 +414,7 @@ internal static unsafe class Decimal32Math
 
         if (x.IsNegative && !oddDegree)
         {
-            // An even root of a negative has no real value.
+            // An even root of a negative value has no real result.
             return Decimal32Arithmetic.Invalid(ref status);
         }
 
@@ -380,7 +451,7 @@ internal static unsafe class Decimal32Math
         var candidateStatus = Decimal32Status.None;
         var candidate = Finish(ref arena, root, wideStatus, rounding, ref candidateStatus);
 
-        if (TryExactRoot(ref arena, candidate, x, degree, out var exact))
+        if (ExactRoot(ref arena, candidate, x, degree) is { } exact)
         {
             return exact;
         }
@@ -391,11 +462,16 @@ internal static unsafe class Decimal32Math
 
     /// <summary>
     /// The square root of the sum of two squares, computed wide enough that squaring an
-    /// operand cannot overflow on the way.
+    /// operand cannot overflow.
     /// </summary>
+    /// <param name="left">The first encoded value.</param>
+    /// <param name="right">The second encoded value.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded result, rounded to the format.</returns>
     public static uint Hypot(uint left, uint right, Decimal32Rounding rounding, ref Decimal32Status status)
     {
-        // An infinite operand settles the result even when the other one is a NaN.
+        // An infinite operand decides the result even when the other operand is a NaN.
         if (Decimal32Encoding.IsInfinity(left) || Decimal32Encoding.IsInfinity(right))
         {
             return Decimal32Encoding.Infinity(false);
@@ -429,9 +505,8 @@ internal static unsafe class Decimal32Math
     }
 
     /// <summary>
-    /// decNumber's decExpOp. The series is evaluated on an operand normalized to below one
-    /// and the result raised back by a power of ten, which is what keeps the iteration
-    /// count down.
+    /// decNumber's decExpOp. The series is evaluated on an operand reduced to below one,
+    /// and the result is raised back by a power of ten. This keeps the iteration count low.
     /// </summary>
     private static Decimal32WideNumber Exponential(ref Decimal32WideArena arena, Decimal32WideNumber rhs,
         Decimal32WideContext set, ref Decimal32Status status)
@@ -468,9 +543,9 @@ internal static unsafe class Decimal32Math
             return result;
         }
 
-        // For a small enough operand the result is 1 in every digit the context keeps,
-        // since e**x is under 1+3x/2 for 0 < x < 0.66. A negative operand needs one more
-        // zero, its result being of the form 0.9999999 rather than 1.0000001.
+        // For a small enough operand, the result is 1 in every digit the context keeps,
+        // because e^x is below 1+3x/2 for 0 < x < 0.66. A negative operand needs one more
+        // zero, because its result has the form 0.9999999 instead of 1.0000001.
         var tiny = Decimal32WideMath.FromInt32(ref arena, 4);
         tiny.Exponent = rhs.IsNegative ? -set.Digits - 1 : -set.Digits;
 
@@ -496,9 +571,9 @@ internal static unsafe class Decimal32Math
 
         if (h > 8)
         {
-            // Ten to a power this large cannot be computed, but it need not be: the result
-            // is certain to overflow or underflow to zero, so hand the raise below a value
-            // that is bound to take it there.
+            // 10 to a power this large cannot be computed, but it is not needed. The result
+            // will certainly overflow or underflow to zero, so pass the raise below a value
+            // that produces that result.
             a.CopyFrom(Decimal32WideMath.FromInt32(ref arena, 2));
             a.Exponent = rhs.IsNegative ? -2 : 0;
             h = 8;
@@ -506,8 +581,8 @@ internal static unsafe class Decimal32Math
         }
         else
         {
-            // Normalizing further than below one cuts iterations, but the power of ten that
-            // undoes it has to stay computable, so the leverage slides with h.
+            // Reducing the operand further below one cuts iterations, but the power of ten
+            // that undoes the reduction must stay computable, so the reduction depends on h.
             var maxLever = rhs.Digits > 8 ? 1 : 0;
             var lever = Math.Min(8 - h, maxLever);
             var use = -rhs.Digits - lever;
@@ -520,8 +595,8 @@ internal static unsafe class Decimal32Math
 
             x.Exponent = use;
 
-            // Hull and Abrham's working precision, widened when the operand carries more
-            // digits than the result: all of them can reach the last digit kept.
+            // Hull and Abrham's working precision, widened when the operand has more digits
+            // than the result, because all of them can affect the last digit kept.
             p = Math.Max(x.Digits, set.Digits) + h + 2;
 
             var termContext = Decimal32WideContext.Default();
@@ -529,16 +604,16 @@ internal static unsafe class Decimal32Math
             termContext.Digits = p;
             termContext.MinExponent = Decimal32WideContext.SmallestExponent;
 
-            // The accumulator holds twice the working precision so that adding each term is
-            // exact and round-off cannot pile up across the iterations.
+            // The accumulator holds twice the working precision, so adding each term is exact
+            // and rounding errors cannot build up across iterations.
             accumulatorContext.Digits = p * 2;
 
             var term = arena.TakeCopy(x);
             var divisor = arena.TakeCopy(Decimal32WideMath.FromInt32(ref arena, 2));
             a.CopyFrom(Decimal32WideMath.One(ref arena));
 
-            // The loop reuses these three slots rather than taking new ones each pass, so
-            // everything above the mark goes back at the end of every iteration.
+            // The loop reuses these three slots instead of taking new ones on each pass, so
+            // everything above the mark is released at the end of every iteration.
             var loop = arena.Mark;
 
             for (;;)
@@ -548,8 +623,8 @@ internal static unsafe class Decimal32Math
                 var next = Decimal32WideMath.Multiply(ref arena, term, x, termContext, ref ignore);
                 term.CopyFrom(Decimal32WideMath.Divide(ref arena, next, divisor, termContext, ref ignore));
 
-                // Done when the term has fallen so far below the accumulator that it cannot
-                // reach the last digit kept, and the accumulator is full length.
+                // Stop when the term is so far below the accumulator that it cannot affect the
+                // last digit kept, and the accumulator is at full length.
                 if (a.Digits + a.Exponent >= term.Digits + term.Exponent + p + 1
                     && a.Digits >= p)
                 {
@@ -566,8 +641,8 @@ internal static unsafe class Decimal32Math
 
         if (h > 0)
         {
-            // Undo the normalization: a**(10**h), by squaring down the bits of 10**h. Only
-            // the multipliers loop is wanted, not the whole of power.
+            // Undo the reduction: compute a^(10^h) by squaring over the bits of 10^h. Only
+            // the multiplication loop of power is needed, not the whole function.
             var n = 1;
             for (var index = 0; index < h; index++)
             {
@@ -582,7 +657,7 @@ internal static unsafe class Decimal32Math
 
             for (var i = 1; ; i++)
             {
-                // Give up once the result is settled either way.
+                // Stop once the result has overflowed, or has underflowed to zero.
                 if ((status & (Decimal32Status.Overflow | Decimal32Status.Underflow)) != 0)
                 {
                     if ((status & Decimal32Status.Overflow) != 0 || raised.IsZero)
@@ -616,8 +691,8 @@ internal static unsafe class Decimal32Math
             a.CopyFrom(raised);
         }
 
-        // Dirt to the right: the series was cut short, so the result is inexact even where
-        // the digits kept do not change.
+        // The series was truncated, so the result is inexact even when the kept digits do
+        // not change.
         var residue = a.IsZero ? 0 : 1;
         result.CopyFrom(Decimal32WideMath.Round(ref arena, a, residue, set, ref status));
         arena.Release(frame + 1);
@@ -625,8 +700,9 @@ internal static unsafe class Decimal32Math
     }
 
     /// <summary>
-    /// decNumber's decLnOp. Newton's method on a' = a + x*exp(-a) - 1, from a four-digit
-    /// estimate off a table, doubling the digits calculated each iteration.
+    /// decNumber's decLnOp. Newton's method on a' = a + x*exp(-a) - 1, starting from a
+    /// four-digit estimate from a table. The number of digits computed doubles on each
+    /// iteration.
     /// </summary>
     private static Decimal32WideNumber NaturalLog(ref Decimal32WideArena arena, Decimal32WideNumber rhs,
         Decimal32WideContext set, ref Decimal32Status status)
@@ -680,8 +756,8 @@ internal static unsafe class Decimal32Math
 
         var ignore = Decimal32Status.None;
 
-        // ln(10) and ln(2) get asked for often enough -- log10 needs the first every time it
-        // runs -- to be worth carrying rather than iterating for.
+        // ln(10) and ln(2) are requested often (log10 needs ln(10) on every call), so they
+        // are stored as constants instead of computed.
         if (rhs.Exponent == 0 && set.Digits <= 40)
         {
             var literalContext = set;
@@ -708,7 +784,7 @@ internal static unsafe class Decimal32Math
 
         var p = Math.Max(rhs.Digits, Math.Max(set.Digits, 7)) + 2;
 
-        // Read the operand as a fraction f times a power of ten, so that
+        // Write the operand as a fraction f times a power of ten r, so that
         // ln(x) = ln(f) + ln(10)*r, and estimate ln(f) from the table.
         var estimateContext = Decimal32WideContext.Default();
         var r = rhs.Exponent + rhs.Digits;
@@ -719,7 +795,7 @@ internal static unsafe class Decimal32Math
         var a = arena.TakeCopy(Decimal32WideMath.Multiply(ref arena, Decimal32WideMath.FromInt32(ref arena, r),
             logTenApproximation, estimateContext, ref ignore));
 
-        // The leading two digits of the coefficient index the table.
+        // The first two digits of the coefficient index the table.
         var leading = (int)(rhs.Digits >= 2
             ? (Decimal32WideUnits.DigitAt(rhs.Lsu, rhs.Units, rhs.Digits - 1) * 10)
                 + Decimal32WideUnits.DigitAt(rhs.Lsu, rhs.Units, rhs.Digits - 2)
@@ -733,20 +809,22 @@ internal static unsafe class Decimal32Math
 
         a.CopyFrom(Decimal32WideMath.Add(ref arena, a, b, estimateContext, ref ignore));
 
-        // Four digits of the estimate are good. Near Nmax it comes in low, so the iteration
+        // The estimate has four correct digits. Near Nmax it is low, so the iteration
         // approaches from below and the exp calls below cannot overflow.
         var accumulatorContext = estimateContext;
         accumulatorContext.MaxExponent = set.MaxExponent;
         accumulatorContext.MinExponent = set.MinExponent;
         accumulatorContext.Clamp = false;
 
-        // The adjustment is a catastrophic subtraction, so it is calculated at the sum of
-        // the operand's precision and the working precision, over doubled bounds.
+        // The adjustment is a subtraction with catastrophic cancellation, so it is computed
+        // at the operand's precision plus the working precision, with twice the normal
+        // exponent range.
         var adjustmentContext = accumulatorContext;
         adjustmentContext.MaxExponent = Decimal32WideContext.MaxMathExponent * 2;
         adjustmentContext.MinExponent = -Decimal32WideContext.MaxMathExponent * 2;
 
-        // Nine to start, so the sequence runs 7+2, 16+2, 34+2: the standard widths.
+        // Start at 9 digits, so the sequence is 7+2, 16+2, 34+2: the standard format
+        // precisions, each plus 2.
         var pp = 9;
         accumulatorContext.Digits = pp;
         adjustmentContext.Digits = pp + rhs.Digits;
@@ -765,9 +843,9 @@ internal static unsafe class Decimal32Math
             b.CopyFrom(Decimal32WideMath.Subtract(ref arena, scaled, Decimal32WideMath.One(ref arena),
                 adjustmentContext, ref ignore));
 
-            // The iteration ends when the adjustment cannot move the result by half a unit
-            // in the last place -- looser than exp needs, since all that follows is the
-            // final rounding -- and the accumulator is full length.
+            // The iteration ends when the adjustment cannot change the result by half a unit
+            // in the last place, and the accumulator is at full length. This is looser than
+            // exp needs, because only the final rounding follows.
             if (b.IsZero || a.Digits + a.Exponent >= b.Digits + b.Exponent + set.Digits + 1)
             {
                 if (a.Digits == p)
@@ -793,7 +871,7 @@ internal static unsafe class Decimal32Math
 
                 if (b.IsZero)
                 {
-                    // Force the padding when the adjustment reached zero early.
+                    // Force the padding if the adjustment reached zero early.
                     b.Exponent = a.Exponent - p;
                 }
             }
@@ -822,7 +900,7 @@ internal static unsafe class Decimal32Math
         return result;
     }
 
-    /// <summary>decNumber's decNumberPower, less the NaN handling its caller does.</summary>
+    /// <summary>decNumber's decNumberPower, without the NaN handling that its caller does.</summary>
     private static Decimal32WideNumber PowerCore(ref Decimal32WideArena arena, Decimal32WideNumber lhs, Decimal32WideNumber rhs,
         Decimal32WideContext set, ref Decimal32Status status)
     {
@@ -842,7 +920,8 @@ internal static unsafe class Decimal32Math
             var comparison = Decimal32WideMath.Compare(lhs, Decimal32WideMath.One(ref arena), false);
             if (comparison == 0)
             {
-                // One to an infinite power is deemed inexact, so it comes back padded.
+                // One raised to an infinite power is treated as inexact, so the result is
+                // padded to full precision.
                 status |= Decimal32Status.Inexact | Decimal32Status.Rounded;
                 result.CopyFrom(PaddedOne(ref arena, set.Digits));
                 arena.Release(frame + 1);
@@ -862,7 +941,9 @@ internal static unsafe class Decimal32Math
 
         var integerExponent = rhs.IsIntegerValued;
         var oddExponent = rhs.IsOddIntegerValued;
-        var useInteger = rhs.TryGetInt32(out var n);
+        var integer = rhs.ToInt32();
+        var useInteger = integer.HasValue;
+        var n = integer.GetValueOrDefault();
         var negative = lhs.IsNegative && oddExponent;
 
         if (lhs.IsInfinity)
@@ -929,15 +1010,16 @@ internal static unsafe class Decimal32Math
             aset.MinExponent = -Decimal32WideContext.MaxMathExponent;
             aset.Clamp = false;
 
-            // Enough to hold the whole information content of the left operand, exponent
-            // included, plus four; six covers any exponent. The spare digits cost ln almost
-            // nothing and cut the cases that land more than half a unit out.
+            // Enough digits to hold all the information in the left operand, including its
+            // exponent, plus four. Six digits cover any exponent. The extra digits cost ln
+            // almost nothing and reduce the cases that end up more than half a unit off.
             aset.Digits = Math.Max(lhs.Digits, set.Digits) + 6 + 4;
 
             var accumulator = arena.TakeCopy(NaturalLog(ref arena, lhs, aset, ref status));
             if (accumulator.IsZero)
             {
-                // The left operand was one, which would otherwise reduce to an integer 1.
+                // ln(x) is zero, so the left operand was 1 and the result is 1. For a
+                // non-integer exponent the result is padded to full precision and inexact.
                 accumulator.CopyFrom(Decimal32WideMath.One(ref arena));
                 if (!integerExponent)
                 {
@@ -979,8 +1061,8 @@ internal static unsafe class Decimal32Math
 
         if (rhs.IsNegative)
         {
-            // Invert the operand now rather than the result later, which keeps the rounding
-            // to one place.
+            // Invert the operand now instead of the result later, so there is only one
+            // rounding.
             multiplicand.CopyFrom(Decimal32WideMath.Divide(ref arena, Decimal32WideMath.One(ref arena), lhs,
                 integerSet, ref status));
         }
@@ -1031,7 +1113,7 @@ internal static unsafe class Decimal32Math
                 return result;
             }
 
-            // Round the subnormal to the requested length rather than the working one.
+            // Round the subnormal result to the requested precision, not the working one.
             result.CopyFrom(dac);
             result.IsNegative = negative;
             Decimal32WideRounding.Finalize(ref result, 0, set, ref status);
@@ -1039,15 +1121,15 @@ internal static unsafe class Decimal32Math
             return result;
         }
 
-        // The sign came out of the multiplications themselves: a negative base reaches an
-        // odd power still negative.
+        // The sign comes from the multiplications: a negative base raised to an odd power
+        // stays negative.
         result.CopyFrom(Decimal32WideMath.Round(ref arena, dac, 0, set, ref status));
         arena.Release(frame + 1);
         return result;
     }
 
     /// <summary>
-    /// decNumber's decNumberLog10, at the engine level so that the reductions built on it
+    /// decNumber's decNumberLog10, on the wide number, so that the operations built on it
     /// keep the exact power-of-ten case.
     /// </summary>
     private static Decimal32WideNumber BaseTenLog(ref Decimal32WideArena arena, Decimal32WideNumber rhs, Decimal32WideContext set,
@@ -1056,15 +1138,15 @@ internal static unsafe class Decimal32Math
         var frame = arena.Mark;
         var result = arena.Take();
 
-        if (TryLogarithmOfSpecial(ref arena, rhs, ref status, out var special))
+        if (LogarithmOfSpecial(ref arena, rhs, ref status) is { } special)
         {
             result.CopyFrom(special);
             arena.Release(frame + 1);
             return result;
         }
 
-        // A coefficient of one followed by zeros makes the value a power of ten, and then
-        // the logarithm is the adjusted exponent, exactly.
+        // A coefficient of 1 followed by zeros means the value is a power of ten, and the
+        // logarithm is exactly the adjusted exponent.
         if (Decimal32WideUnits.IsPowerOfTen(rhs.Lsu, rhs.Units, rhs.Digits))
         {
             var power = Decimal32WideMath.FromInt32(ref arena, rhs.Exponent + rhs.Digits - 1);
@@ -1080,21 +1162,21 @@ internal static unsafe class Decimal32Math
         return result;
     }
 
-    /// <summary>The same shape for base two, whose exact case is a power of two.</summary>
+    /// <summary>The same method for base 2, whose exact case is a power of two.</summary>
     private static Decimal32WideNumber BaseTwoLog(ref Decimal32WideArena arena, Decimal32WideNumber rhs, Decimal32WideContext set,
         ref Decimal32Status status)
     {
         var frame = arena.Mark;
         var result = arena.Take();
 
-        if (TryLogarithmOfSpecial(ref arena, rhs, ref status, out var special))
+        if (LogarithmOfSpecial(ref arena, rhs, ref status) is { } special)
         {
             result.CopyFrom(special);
             arena.Release(frame + 1);
             return result;
         }
 
-        if (Decimal32WideConstants.TryPowerOfTwoExponent(rhs, arena.TakeUnits(), out var exponent))
+        if (Decimal32WideConstants.PowerOfTwoExponent(rhs, arena.TakeUnits()) is { } exponent)
         {
             result.CopyFrom(Decimal32WideMath.Round(ref arena, Decimal32WideMath.FromInt32(ref arena, exponent),
                 0, set, ref status));
@@ -1111,9 +1193,9 @@ internal static unsafe class Decimal32Math
     }
 
     /// <summary>
-    /// ln(x)/ln(base), at the precisions decNumber uses for log10: the numerator carries the
-    /// whole information content of the operand, the divisor three guard digits, and the
-    /// division alone is done at the requested precision.
+    /// ln(x)/ln(base), at the precisions decNumber uses for log10. The numerator keeps all
+    /// the information in the operand, the divisor has three guard digits, and only the
+    /// division is done at the requested precision.
     /// </summary>
     private static Decimal32WideNumber DividedLogarithm(ref Decimal32WideArena arena, Decimal32WideNumber rhs,
         Decimal32WideNumber wholeBase, Decimal32WideContext set, ref Decimal32Status status)
@@ -1126,9 +1208,9 @@ internal static unsafe class Decimal32Math
         aset.MinExponent = -Decimal32WideContext.MaxMathExponent;
         aset.Clamp = false;
 
-        // Six digits covers any exponent, and letting all of the operand participate costs
-        // ln almost nothing: it doubles its precision each iteration, so a few extra digits
-        // rarely buys another one.
+        // Six digits cover any exponent. Using the whole operand costs ln almost nothing:
+        // ln doubles its precision on each iteration, so a few extra digits rarely add an
+        // iteration.
         aset.Digits = Math.Max(rhs.Digits + 6, set.Digits) + 3;
         var logarithm = NaturalLog(ref arena, rhs, aset, ref status);
 
@@ -1139,8 +1221,8 @@ internal static unsafe class Decimal32Math
             return result;
         }
 
-        // The divisor is always inexact and always rounded, and saying so would tell the
-        // caller nothing; anything else it raises, such as an unusable base, does.
+        // The divisor is always inexact and rounded, so reporting that tells the caller
+        // nothing. Any other condition it raises, such as an unusable base, is reported.
         var baseStatus = Decimal32Status.None;
         aset.Digits = set.Digits + 3;
         var divisor = NaturalLog(ref arena, wholeBase, aset, ref baseStatus);
@@ -1153,17 +1235,16 @@ internal static unsafe class Decimal32Math
     }
 
     /// <summary>
-    /// The cases every logarithm shares: a NaN passes through, a negative is invalid, zero
-    /// gives -Infinity, and +Infinity gives itself.
+    /// Handles the cases all logarithms share: a NaN passes through, a negative value is
+    /// invalid, zero gives -Infinity, and +Infinity gives +Infinity. The result is null for
+    /// a positive finite value, which needs the full computation.
     /// </summary>
-    private static bool TryLogarithmOfSpecial(ref Decimal32WideArena arena, Decimal32WideNumber rhs,
-        ref Decimal32Status status, out Decimal32WideNumber result)
+    private static Decimal32WideNumber? LogarithmOfSpecial(ref Decimal32WideArena arena, Decimal32WideNumber rhs,
+        ref Decimal32Status status)
     {
-        result = rhs;
-
         if (rhs.IsNaN)
         {
-            return true;
+            return rhs;
         }
 
         if (rhs.IsInfinity)
@@ -1171,26 +1252,24 @@ internal static unsafe class Decimal32Math
             if (rhs.IsNegative)
             {
                 status |= Decimal32Status.InvalidOperation;
-                result = Decimal32WideMath.QuietNaN(ref arena);
+                return Decimal32WideMath.QuietNaN(ref arena);
             }
 
-            return true;
+            return rhs;
         }
 
         if (rhs.IsZero)
         {
-            result = Decimal32WideMath.Infinity(ref arena, true);
-            return true;
+            return Decimal32WideMath.Infinity(ref arena, true);
         }
 
         if (rhs.IsNegative)
         {
             status |= Decimal32Status.InvalidOperation;
-            result = Decimal32WideMath.QuietNaN(ref arena);
-            return true;
+            return Decimal32WideMath.QuietNaN(ref arena);
         }
 
-        return false;
+        return null;
     }
 
     private static uint RaiseWholeBase(int wholeBase, uint value, Decimal32Rounding rounding, ref Decimal32Status status)
@@ -1238,7 +1317,7 @@ internal static unsafe class Decimal32Math
         var lost = LeadingDigitsLost(x);
         if (lost > Decimal32Encoding.Precision + 3)
         {
-            // Below this the result is x*ln(base) to well past the last digit kept.
+            // Below this, the result equals x*ln(base) well past the last digit kept.
             var narrow = GuardedContext(3);
             var narrowStatus = Decimal32Status.Inexact;
 
@@ -1293,7 +1372,7 @@ internal static unsafe class Decimal32Math
 
         if (lost > Decimal32Encoding.Precision + 3)
         {
-            // The result is x/ln(base) to well past the last digit kept.
+            // The result equals x/ln(base) well past the last digit kept.
             var divisor = NaturalLog(ref arena, Decimal32WideMath.FromInt32(ref arena, wholeBase), wide,
                 ref wideStatus);
 
@@ -1310,8 +1389,8 @@ internal static unsafe class Decimal32Math
     }
 
     /// <summary>
-    /// One plus the value, exactly. The context is widened by the digits the operand sits
-    /// below the point so that none of it is lost in the sum.
+    /// One plus the value, exactly. The context is widened by the number of digits the
+    /// operand has below the decimal point, so none of them are lost in the sum.
     /// </summary>
     private static Decimal32WideNumber OnePlus(ref Decimal32WideArena arena, Decimal32WideNumber value, int lost)
     {
@@ -1321,8 +1400,8 @@ internal static unsafe class Decimal32Math
     }
 
     /// <summary>
-    /// How many digits a subtraction from one cancels: the leading digit of the operand plus
-    /// the zeros between it and the point.
+    /// The number of digits a subtraction from one cancels: the operand's leading digit plus
+    /// the zeros between it and the decimal point.
     /// </summary>
     private static int LeadingDigitsLost(Decimal32WideNumber value)
     {
@@ -1331,8 +1410,9 @@ internal static unsafe class Decimal32Math
     }
 
     /// <summary>
-    /// The context the reductions are evaluated in: guard digits above the format, and no
-    /// exponent limits, so that only the final rounding into the format can overflow.
+    /// The context the functions are evaluated in: guard digits beyond the format's
+    /// precision, and no exponent limits, so only the final rounding into the format can
+    /// overflow.
     /// </summary>
     private static Decimal32WideContext GuardedContext(int guardDigits)
     {
@@ -1345,9 +1425,9 @@ internal static unsafe class Decimal32Math
     }
 
     /// <summary>
-    /// Rounds a value evaluated at guard digits into the format, once. An evaluation that
-    /// was inexact hands the rounding a residue, so that a result which happens to end in
-    /// zeros is still reported as the approximation it is.
+    /// Rounds a value evaluated with guard digits into the format, once. If the evaluation
+    /// was inexact, the rounding gets a residue, so a result that happens to end in zeros is
+    /// still reported as inexact.
     /// </summary>
     private static uint Finish(ref Decimal32WideArena arena, Decimal32WideNumber value, Decimal32Status wideStatus,
         Decimal32Rounding rounding, ref Decimal32Status status)
@@ -1368,34 +1448,31 @@ internal static unsafe class Decimal32Math
         return Decimal32WideMath.Round(ref arena, value, residue, set, ref status).ToBits();
     }
 
-    /// <summary>Whether a value is exactly a given small whole number.</summary>
+    /// <summary>Whether a value is exactly the given small integer.</summary>
     private static bool IsWholeNumber(Decimal32WideNumber value, int whole)
     {
-        return value.IsFinite && !value.IsNegative && value.TryGetInt32(out var integer)
-            && integer == whole;
+        return value.IsFinite && !value.IsNegative && value.ToInt32() == whole;
     }
 
     /// <summary>
-    /// Whether a rounded root is the exact one, by raising it back to the degree. An exact
-    /// root is then shortened toward the operand's exponent divided by the degree, which is
-    /// what the square root does with its own.
+    /// Whether a rounded root is exact, checked by raising it back to the degree. An exact
+    /// root is then shortened toward the operand's exponent divided by the degree, as the
+    /// square root does. The result is the encoded exact root, or null if the candidate is
+    /// not exact.
     /// </summary>
-    private static bool TryExactRoot(ref Decimal32WideArena arena, uint candidate, Decimal32WideNumber value, int degree,
-        out uint result)
+    private static uint? ExactRoot(ref Decimal32WideArena arena, uint candidate, Decimal32WideNumber value, int degree)
     {
-        result = candidate;
-
-        // Past this the raise costs more than the case is worth, and an exact root of such a
-        // degree needs an operand that is a perfect power of it.
+        // Beyond this degree, the raise costs more than the case is worth, and an exact root
+        // needs an operand that is a perfect power of that degree.
         if (Math.Abs(degree) > 40 || Decimal32Encoding.IsSpecial(candidate))
         {
-            return false;
+            return null;
         }
 
         var candidateCoefficient = Decimal32Encoding.Unpack(candidate, out var candidateExponent);
         if (candidateCoefficient == 0)
         {
-            return false;
+            return null;
         }
 
         var frame = arena.Mark;
@@ -1420,17 +1497,17 @@ internal static unsafe class Decimal32Math
 
             if (raised.Digits > exact.Digits - 40)
             {
-                // The raise has outgrown what an exact comparison can carry, which means
-                // the operand cannot be a perfect power of this degree anyway.
+                // The raised value is too wide for an exact comparison, which means the
+                // operand cannot be a perfect power of this degree.
                 arena.Release(frame);
-                return false;
+                return null;
             }
         }
 
         var raisedExponent = (long)candidateExponent * magnitude;
 
-        // A negative degree gives the reciprocal, so the test becomes whether the raised
-        // root times the operand is one.
+        // A negative degree gives the reciprocal, so the test is whether the raised root
+        // times the operand is one.
         var comparandExponent = degree > 0 ? (long)value.Exponent : 0L;
         var comparand = arena.Take();
 
@@ -1454,13 +1531,13 @@ internal static unsafe class Decimal32Math
         }
 
         // Two equal values have digit counts that differ by at most the widest exact
-        // intermediate, so a larger gap says they differ without any shifting -- and a
-        // shift that large would outrun the slot.
+        // intermediate. A larger gap means they differ, without any shifting. A shift that
+        // large would also overflow the slot.
         var common = Math.Min(raisedExponent, comparandExponent);
         if (raisedExponent - common > 500 || comparandExponent - common > 500)
         {
             arena.Release(frame);
-            return false;
+            return null;
         }
 
         raised.Units = Decimal32WideUnits.ShiftUp(raised.Lsu, raised.Units, (int)(raisedExponent - common));
@@ -1474,7 +1551,7 @@ internal static unsafe class Decimal32Math
         if (Decimal32WideUnits.Compare(raised.Lsu, raised.Units, comparand.Lsu, comparand.Units) != 0)
         {
             arena.Release(frame);
-            return false;
+            return null;
         }
 
         var ideal = FloorDivide(value.Exponent, degree);
@@ -1482,14 +1559,13 @@ internal static unsafe class Decimal32Math
         var shortenedExponent = candidateExponent;
         Decimal32Shaping.StripTrailingZeros(ref shortened, ref shortenedExponent, ideal);
 
-        result = Decimal32Encoding.Pack(Decimal32Encoding.IsNegative(candidate), shortenedExponent, (uint)shortened);
         arena.Release(frame);
-        return true;
+        return Decimal32Encoding.Pack(Decimal32Encoding.IsNegative(candidate), shortenedExponent, (uint)shortened);
     }
 
     /// <summary>
-    /// Division rounding toward negative infinity, which is what an exponent divided by a
-    /// root's degree calls for: the preferred exponent goes down, not toward zero.
+    /// Integer division rounding toward negative infinity, which an exponent divided by a
+    /// root's degree requires: the preferred exponent rounds down, not toward zero.
     /// </summary>
     private static int FloorDivide(int value, int divisor)
     {
@@ -1503,8 +1579,8 @@ internal static unsafe class Decimal32Math
     }
 
     /// <summary>
-    /// One written out to the full width of the context, which is how the specification asks
-    /// an inexact one to be presented.
+    /// One written to the full precision of the context, which is how the specification
+    /// presents an inexact one.
     /// </summary>
     private static Decimal32WideNumber PaddedOne(ref Decimal32WideArena arena, int digits)
     {

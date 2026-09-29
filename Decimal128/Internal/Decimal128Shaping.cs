@@ -6,16 +6,22 @@ using System.Runtime.CompilerServices;
 namespace Decimals.Internal;
 
 /// <summary>
-/// The operations that move a value's digits without changing what it is worth: rescaling
-/// to an exponent, rounding to an integer, stripping zeros, stepping to a neighbor, and
-/// reading or shifting the exponent.
+/// Operations on a value's digits and exponent: rescaling to an exponent, rounding to an
+/// integer, removing trailing zeros, stepping to the next value, and reading or shifting
+/// the exponent.
 /// </summary>
 internal static class Decimal128Shaping
 {
     /// <summary>
-    /// Rescales the value to the pattern's exponent. Needing more digits than the format
-    /// holds is invalid rather than rounded: the value cannot be said at that exponent.
+    /// Rescales the value to the pattern's exponent. If the result needs more digits than
+    /// the format holds, the operation is invalid instead of rounding, because the value
+    /// cannot be represented at that exponent.
     /// </summary>
+    /// <param name="value">The encoded value to rescale.</param>
+    /// <param name="pattern">The encoded value whose exponent the result takes.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded value at the pattern's exponent, or a quiet NaN if it does not fit.</returns>
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static Decimal128Integer Quantize(Decimal128Integer value, Decimal128Integer pattern,
         Decimal128Rounding rounding, ref Decimal128Status status)
@@ -27,7 +33,7 @@ internal static class Decimal128Shaping
                 return Decimal128Arithmetic.PropagateNaN(value, pattern, ref status);
             }
 
-            // Only two infinities quantize to anything; one of each is invalid.
+            // Two infinities give an infinity. An infinity with a finite value is invalid.
             if (Decimal128Encoding.IsInfinity(value) && Decimal128Encoding.IsInfinity(pattern))
             {
                 return Decimal128Encoding.Infinity(Decimal128Encoding.IsNegative(value));
@@ -40,7 +46,12 @@ internal static class Decimal128Shaping
         return Rescale(value, exponent, rounding, ref status);
     }
 
-    /// <summary>Rescales a finite value to an exponent given directly.</summary>
+    /// <summary>Rescales a finite value to the given exponent.</summary>
+    /// <param name="value">The encoded value to rescale.</param>
+    /// <param name="exponent">The exponent the result takes.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded value at <paramref name="exponent"/>, or a quiet NaN if the exponent is out of range or the value does not fit.</returns>
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static Decimal128Integer Rescale(Decimal128Integer value, int exponent, Decimal128Rounding rounding,
         ref Decimal128Status status)
@@ -102,17 +113,22 @@ internal static class Decimal128Shaping
         var result = Decimal128Finalizer.Finalize(negative, coefficient, exponent, Decimal128Residue.Exact, rounding,
             ref status);
 
-        // Quantize is defined never to signal underflow: losing precision to reach the
-        // requested exponent is the operation working, not a result vanishing.
+        // Quantize never signals underflow. Losing digits to reach the requested exponent
+        // is the intended result, not a result that became too small.
         status &= ~Decimal128Status.Underflow;
         return result;
     }
 
     /// <summary>
-    /// Rounds to an integer. <paramref name="exact"/> chooses between the two operations
-    /// the specification offers: the exact one reports that digits were lost, the other is
-    /// defined never to say it rounded.
+    /// Rounds to an integer. <paramref name="exact"/> chooses between the specification's
+    /// two operations: the exact one reports that digits were lost, and the other never
+    /// reports rounding.
     /// </summary>
+    /// <param name="value">The encoded value to round.</param>
+    /// <param name="exact">Whether to report Rounded and Inexact when digits are removed.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded integer value.</returns>
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static Decimal128Integer ToIntegral(Decimal128Integer value, bool exact, Decimal128Rounding rounding,
         ref Decimal128Status status)
@@ -132,7 +148,7 @@ internal static class Decimal128Shaping
 
         if (exponent >= 0)
         {
-            // Already an integer, and one whose exponent says so.
+            // The value is already an integer, with a non-negative exponent.
             return Decimal128Encoding.Pack(negative, exponent, coefficient);
         }
 
@@ -162,11 +178,14 @@ internal static class Decimal128Shaping
     }
 
     /// <summary>
-    /// Walks trailing zeros off the coefficient, raising the exponent to match, which
-    /// leaves the shortest coefficient of the same value. Stops at
-    /// <paramref name="exponentLimit"/> so that an integer keeps the zeros that are part of
-    /// its magnitude.
+    /// Removes trailing zeros from the coefficient and raises the exponent to match, which
+    /// gives the shortest coefficient with the same value. Stops at
+    /// <paramref name="exponentLimit"/>, so an integer keeps the zeros that are part of its
+    /// magnitude.
     /// </summary>
+    /// <param name="coefficient">The coefficient. Receives the coefficient without its trailing zeros.</param>
+    /// <param name="exponent">The coefficient's exponent. Receives the raised exponent.</param>
+    /// <param name="exponentLimit">The highest exponent the result can take.</param>
     public static void StripTrailingZeros(ref Decimal128Integer coefficient, ref int exponent, int exponentLimit)
     {
         if (coefficient.IsZero)
@@ -174,8 +193,8 @@ internal static class Decimal128Shaping
             return;
         }
 
-        // Sixteen zeros at a time, then eight, four, two, one: a run of zeros comes off in
-        // a few divisions rather than one per zero.
+        // Remove zeros sixteen at a time, then eight, four, two, and one. A run of zeros
+        // takes a few divisions instead of one division per zero.
         for (var step = 16; step >= 1; step /= 2)
         {
             while (exponent + step <= exponentLimit)
@@ -193,8 +212,12 @@ internal static class Decimal128Shaping
     }
 
     /// <summary>
-    /// Removes trailing zeros, leaving the shortest coefficient of the same value.
+    /// Removes trailing zeros, which gives the shortest coefficient with the same value.
     /// </summary>
+    /// <param name="value">The encoded value to reduce.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded value with no trailing zeros in its coefficient.</returns>
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static Decimal128Integer Reduce(Decimal128Integer value, Decimal128Rounding rounding,
         ref Decimal128Status status)
@@ -211,14 +234,13 @@ internal static class Decimal128Shaping
 
         if (Decimal128Encoding.IsZero(value))
         {
-            // Every zero reduces to the same one, whatever exponent it arrived with, and it
-            // keeps its sign: applying the context first would turn a negative zero
-            // positive, as plus does.
+            // Every zero reduces to the same zero, whatever its exponent, and keeps its sign.
+            // Applying the context first would make a negative zero positive, as plus does.
             return Decimal128Encoding.Zero(Decimal128Encoding.IsNegative(value), 0);
         }
 
-        // Applying the context first is what settles a subnormal operand's conditions
-        // before its zeros are counted.
+        // Apply the context first, so a subnormal operand raises its conditions before its
+        // zeros are removed.
         var applied = Decimal128Arithmetic.AddToZero(value, false, rounding, ref status);
         var coefficient = Decimal128Encoding.Unpack(applied, out var exponent);
 
@@ -227,9 +249,11 @@ internal static class Decimal128Shaping
     }
 
     /// <summary>
-    /// Like <see cref="Reduce"/> but stopping at a zero exponent, so an integer keeps the
-    /// zeros that are part of its magnitude.
+    /// Like <see cref="Reduce"/>, but stops at exponent zero, so an integer keeps the zeros
+    /// that are part of its magnitude.
     /// </summary>
+    /// <param name="value">The encoded value to trim.</param>
+    /// <returns>The encoded value with no trailing zeros after the decimal point.</returns>
     public static Decimal128Integer Trim(Decimal128Integer value)
     {
         if (Decimal128Encoding.IsSpecial(value))
@@ -248,10 +272,13 @@ internal static class Decimal128Shaping
     }
 
     /// <summary>
-    /// The adjusted exponent as an integer value. A zero has no leading digit to point at,
-    /// so it reports negative infinity and signals division by zero, the way the logarithm
-    /// it stands in for would.
+    /// The adjusted exponent as a decimal value. Zero has no leading digit, so it returns
+    /// negative infinity and signals division by zero, as a logarithm of zero would.
     /// </summary>
+    /// <param name="value">The encoded operand.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded adjusted exponent.</returns>
     public static Decimal128Integer LogB(Decimal128Integer value, Decimal128Rounding rounding,
         ref Decimal128Status status)
     {
@@ -278,11 +305,13 @@ internal static class Decimal128Shaping
     }
 
     /// <summary>
-    /// The adjusted exponent as a plain integer, which is what .NET's ILogB gives. The
-    /// results off the end of the range are .NET's rather than the specification's: a zero
-    /// gives <see cref="int.MinValue"/> and a NaN or an infinity gives
-    /// <see cref="int.MaxValue"/>, where logb gives -Infinity, a NaN, and +Infinity.
+    /// The adjusted exponent as an <see cref="int"/>, as .NET's ILogB returns it. The
+    /// results for special inputs follow .NET, not the specification: zero gives
+    /// <see cref="int.MinValue"/>, and a NaN or an infinity gives <see cref="int.MaxValue"/>.
+    /// The specification's logb gives -Infinity, a NaN, and +Infinity for these.
     /// </summary>
+    /// <param name="value">The encoded operand.</param>
+    /// <returns>The adjusted exponent, or one of the special results above.</returns>
     public static int ILogB(Decimal128Integer value)
     {
         if (Decimal128Encoding.IsSpecial(value))
@@ -300,12 +329,17 @@ internal static class Decimal128Shaping
     }
 
     /// <summary>
-    /// The largest shift scaleb accepts: no larger than could move any value from one end
-    /// of the format's range to the other.
+    /// The largest shift scaleb accepts. It is enough to move any value from one end of the
+    /// format's range to the other.
     /// </summary>
     private const int ScaleLimit = 2 * (Decimal128Encoding.MaxExponent + Decimal128Encoding.Precision);
 
     /// <summary>Multiplies by a power of ten given as a second operand.</summary>
+    /// <param name="value">The encoded value to scale.</param>
+    /// <param name="scale">The encoded power of ten. It must be an integer with exponent zero.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded result, rounded to the format, or a quiet NaN if the scale is invalid.</returns>
     public static Decimal128Integer ScaleB(Decimal128Integer value, Decimal128Integer scale, Decimal128Rounding rounding,
         ref Decimal128Status status)
     {
@@ -314,9 +348,9 @@ internal static class Decimal128Shaping
             return Decimal128Arithmetic.PropagateNaN(value, scale, ref status);
         }
 
-        // The shift has to be a plain integer inside the limit; anything else is invalid
-        // rather than clamped.
-        if (!TryReadInteger(scale, ScaleLimit, out var shift))
+        // The shift must be an integer within the limit. Anything else is invalid, not
+        // clamped.
+        if (ReadInteger(scale, ScaleLimit) is not { } shift)
         {
             return Decimal128Arithmetic.Invalid(ref status);
         }
@@ -325,9 +359,14 @@ internal static class Decimal128Shaping
     }
 
     /// <summary>
-    /// Multiplies by ten to <paramref name="shift"/>. A shift past the limit is an invalid
-    /// operation, as it is when given as an operand, rather than an overflow.
+    /// Multiplies by 10 to the power <paramref name="shift"/>. A shift beyond the limit is
+    /// an invalid operation, as it is when given as an operand, not an overflow.
     /// </summary>
+    /// <param name="value">The encoded value to scale.</param>
+    /// <param name="shift">The power of ten.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded result, rounded to the format, or a quiet NaN if the shift is beyond the limit.</returns>
     public static Decimal128Integer ScaleB(Decimal128Integer value, int shift, Decimal128Rounding rounding,
         ref Decimal128Status status)
     {
@@ -352,34 +391,41 @@ internal static class Decimal128Shaping
     }
 
     /// <summary>
-    /// Reads an operand as a plain integer, which the shift-like operations take rather
-    /// than a general value: it has to be finite, have an exponent of zero, and fall inside
-    /// the limit.
+    /// Reads an operand as an integer, for the operations that take a shift count instead
+    /// of a general value. The operand must be finite, have exponent zero, and be within the
+    /// limit.
     /// </summary>
-    public static bool TryReadInteger(Decimal128Integer value, int limit, out int result)
+    /// <param name="value">The encoded operand.</param>
+    /// <param name="limit">The largest magnitude accepted.</param>
+    /// <returns>The integer, or null if the operand is not an integer within the limit.</returns>
+    public static int? ReadInteger(Decimal128Integer value, int limit)
     {
-        result = 0;
-
         if (Decimal128Encoding.IsSpecial(value))
         {
-            return false;
+            return null;
         }
 
         var coefficient = Decimal128Encoding.Unpack(value, out var exponent);
         if (exponent != 0 || !coefficient.IsWord || coefficient.Low > (ulong)limit)
         {
-            return false;
+            return null;
         }
 
         var magnitude = (int)coefficient.Low;
-        result = Decimal128Encoding.IsNegative(value) ? -magnitude : magnitude;
-        return true;
+        return Decimal128Encoding.IsNegative(value)
+            ? -magnitude
+            : magnitude;
     }
 
     /// <summary>
-    /// Moves the coefficient's digits within the format's full width. Rotating carries
-    /// digits round the ends; shifting drops them and brings zeros in.
+    /// Moves the coefficient's digits within the format's full width. A rotate moves digits
+    /// that leave one end back in at the other end. A shift drops them and brings in zeros.
     /// </summary>
+    /// <param name="value">The encoded value whose digits move.</param>
+    /// <param name="places">The encoded number of positions. A positive count moves digits toward the most significant end.</param>
+    /// <param name="rotate">Whether digits that leave one end come back in at the other, instead of being dropped.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded result, or a quiet NaN if the count is not an integer within the precision.</returns>
     public static Decimal128Integer RotateOrShift(Decimal128Integer value, Decimal128Integer places, bool rotate,
         ref Decimal128Status status)
     {
@@ -388,9 +434,9 @@ internal static class Decimal128Shaping
             return Decimal128Arithmetic.PropagateNaN(value, places, ref status);
         }
 
-        // The count has to be a plain integer no further than the width in either
-        // direction; anything else is invalid rather than clamped.
-        if (!TryReadInteger(places, Decimal128Encoding.Precision, out var count))
+        // The count must be an integer no larger than the precision in either direction.
+        // Anything else is invalid, not clamped.
+        if (ReadInteger(places, Decimal128Encoding.Precision) is not { } count)
         {
             return Decimal128Arithmetic.Invalid(ref status);
         }
@@ -408,9 +454,9 @@ internal static class Decimal128Shaping
             return Decimal128Encoding.Pack(negative, exponent, coefficient);
         }
 
-        // A positive count moves digits toward the leading end. What leaves the
-        // thirty-four digit field at the top comes back in at the bottom for a rotate and
-        // is lost for a shift; a negative count runs the other way.
+        // A positive count moves digits toward the most significant end. Digits that leave
+        // the top of the 34-digit field come back in at the bottom for a rotate, and are
+        // lost for a shift. A negative count moves digits the other way.
         var left = count > 0 ? count : Decimal128Encoding.Precision + count;
         var right = Decimal128Encoding.Precision - left;
 
@@ -441,7 +487,12 @@ internal static class Decimal128Shaping
         return Decimal128Encoding.Pack(negative, exponent, result);
     }
 
-    /// <summary>The next value above or below, which is a step of one in the last place.</summary>
+    /// <summary>The next representable value above or below.</summary>
+    /// <param name="value">The encoded value to step from.</param>
+    /// <param name="toward">True to step toward positive infinity, false to step toward negative infinity.</param>
+    /// <param name="quiet">Whether to report only InvalidOperation, as next-plus and next-minus do. Otherwise overflow and a subnormal result are also reported, as next-toward does.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded adjacent value.</returns>
     public static Decimal128Integer Next(Decimal128Integer value, bool toward, bool quiet, ref Decimal128Status status)
     {
         if (Decimal128Encoding.IsSpecial(value))
@@ -453,17 +504,17 @@ internal static class Decimal128Shaping
 
             if (Decimal128Encoding.IsNegative(value) == toward)
             {
-                // Stepping inward from an infinity lands on the largest finite.
+                // Stepping inward from an infinity gives the largest finite value.
                 return Decimal128Encoding.Pack(Decimal128Encoding.IsNegative(value),
                     Decimal128Encoding.MaxQuantumExponent, Decimal128Encoding.MaxCoefficient);
             }
 
-            // Stepping outward stays put.
+            // Stepping outward from an infinity returns the same infinity.
             return Decimal128Encoding.Infinity(Decimal128Encoding.IsNegative(value));
         }
 
-        // Adding a value smaller than the smallest subnormal, so the rounding is what moves
-        // the value and the amount added never shows up in the result.
+        // Add a value smaller than the smallest subnormal. The rounding direction moves the
+        // result to the next value, and the added amount itself never appears in the result.
         var coefficient = Decimal128Encoding.Unpack(value, out var exponent);
         var rounding = toward ? Decimal128Rounding.Ceiling : Decimal128Rounding.Floor;
         var raised = Decimal128Status.None;
@@ -471,8 +522,8 @@ internal static class Decimal128Shaping
         var result = Decimal128Arithmetic.AddFinite(Decimal128Encoding.IsNegative(value), coefficient, exponent,
             !toward, Decimal128Integer.One, Decimal128Encoding.MinQuantumExponent - 1, rounding, ref raised);
 
-        // next-plus and next-minus report nothing about how they got there; next-toward is
-        // an arithmetic operation and reports underflow like one.
+        // next-plus and next-minus report no conditions except invalid operation.
+        // next-toward is an arithmetic operation and reports underflow like one.
         status |= raised & Decimal128Status.InvalidOperation;
         if (quiet)
         {
@@ -485,8 +536,8 @@ internal static class Decimal128Shaping
         }
         else if ((raised & Decimal128Status.Underflow) != 0 || Decimal128Ordering.IsSubnormal(result))
         {
-            // Stepping into or through the subnormal range is reported; a step that lands
-            // on an ordinary value says nothing, however much rounding it took to get there.
+            // A step into or within the subnormal range is reported. A step that lands on a
+            // normal value reports nothing, even though it was rounded.
             status |= raised & (Decimal128Status.Underflow | Decimal128Status.Inexact | Decimal128Status.Subnormal
                 | Decimal128Status.Rounded | Decimal128Status.Clamped);
         }
@@ -495,9 +546,13 @@ internal static class Decimal128Shaping
     }
 
     /// <summary>
-    /// The next value from the first operand in the direction of the second. Unlike
-    /// next-plus and next-minus this one reports a subnormal result.
+    /// The next value from the first operand toward the second. Unlike next-plus and
+    /// next-minus, it reports a subnormal result.
     /// </summary>
+    /// <param name="value">The encoded value to step from.</param>
+    /// <param name="target">The encoded value to step toward.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The encoded next value, or the first operand with the second operand's sign when they are equal.</returns>
     public static Decimal128Integer NextToward(Decimal128Integer value, Decimal128Integer target,
         ref Decimal128Status status)
     {
@@ -509,8 +564,8 @@ internal static class Decimal128Shaping
         var comparison = Decimal128Ordering.CompareValues(value, target);
         if (comparison == 0)
         {
-            // Already there. The result keeps the first operand's digits and takes the
-            // second's sign, which is the only thing left to move.
+            // The operands are equal. The result keeps the first operand's digits and takes
+            // the second operand's sign.
             var magnitude = Decimal128Ordering.Magnitude(Decimal128Encoding.Canonical(value));
             return new Decimal128Integer(magnitude.High | (target.High & Decimal128Encoding.SignMask), magnitude.Low);
         }
@@ -519,10 +574,14 @@ internal static class Decimal128Shaping
     }
 
     /// <summary>
-    /// Rounds to a given number of fractional digits, for the .NET Round overloads. Asking
-    /// for more digits than the value has is not an error, it just leaves it be: padding it
-    /// out would change the quantum, which is what quantize is for.
+    /// Rounds to the given number of fractional digits, for the .NET Round overloads. If
+    /// the value already has that many fractional digits or fewer, it is returned
+    /// unchanged. Adding zeros would change the quantum, which is what quantize is for.
     /// </summary>
+    /// <param name="value">The encoded value to round.</param>
+    /// <param name="digits">The number of fractional digits to keep.</param>
+    /// <param name="rounding">The rounding mode.</param>
+    /// <returns>The encoded rounded value, or <paramref name="value"/> unchanged if it needs no rounding or the rounded value does not fit.</returns>
     public static Decimal128Integer Round(Decimal128Integer value, int digits, Decimal128Rounding rounding)
     {
         if (Decimal128Encoding.IsSpecial(value))

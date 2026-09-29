@@ -8,19 +8,18 @@ using Decimals.Internal;
 namespace Decimals.Tests;
 
 /// <summary>
-/// The tables underneath <see cref="Decimal64"/>: the reciprocals that stand in for dividing
-/// by a power of ten, and the digit count. The reciprocal constants were found by a
-/// generator and pasted in, so these re-derive them rather than trusting the paste, and
-/// then check the quotient against real division over the numerators that reach it.
+/// Tests the tables used by <see cref="Decimal64"/>: the reciprocals used to divide by a
+/// power of ten, and the digit count. The reciprocal constants were generated and pasted
+/// into the source. These tests recompute them, then check the quotients against real
+/// division over the full range of numerators.
 /// </summary>
 public class Decimal64TableTests
 {
     /// <summary>
-    /// The condition that makes a pair exact rather than approximate. With
-    /// <c>M = ceil(2^s / d)</c> and <c>e = M*d - 2^s</c>, the quotient is right for every
-    /// numerator up to <c>n_max</c> exactly when <c>n_max * e &lt; 2^s</c>. Checking that
-    /// with big integers is a proof for the whole 64-bit range, which no amount of sampling
-    /// would give.
+    /// Checks the condition that makes each multiplier and shift exact. With
+    /// <c>M = ceil(2^s / d)</c> and <c>e = M*d - 2^s</c>, the quotient is correct for every
+    /// numerator up to <c>n_max</c> if and only if <c>n_max * e &lt; 2^s</c>. Checking this
+    /// with big integers proves the result for the whole 64-bit range. Sampling could not.
     /// </summary>
     [Fact]
     public void EveryReciprocalIsExactAcrossTheWholeRange()
@@ -35,8 +34,8 @@ public class Decimal64TableTests
             Assert.Equal((int)divisor.GetBitLength() - 1, shift);
             Assert.Equal(BigInteger.Divide(scale + divisor - 1, divisor), multiplier);
 
-            // The pre-shift takes the 2^p half, leaving 5^p to divide by and a numerator of
-            // 64 - p bits.
+            // The pre-shift divides by 2^p, which leaves a division by 5^p and a numerator
+            // of 64 - p bits.
             var numeratorLimit = (BigInteger.One << (64 - power)) - 1;
             var error = (multiplier * divisor) - scale;
 
@@ -75,8 +74,8 @@ public class Decimal64TableTests
                 var value = NextUInt64(random);
                 AssertDivides(value, power, divisor);
 
-                // And a value that divides exactly, plus its neighbors, since those are
-                // where an off-by-one in the multiplier would show first.
+                // Also test an exact multiple and its neighbors. An off-by-one error in the
+                // multiplier shows up there first.
                 var exact = (value / divisor) * divisor;
                 AssertDivides(exact, power, divisor);
 

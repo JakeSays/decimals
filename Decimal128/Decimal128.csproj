@@ -7,8 +7,6 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Tests" />
-    <!-- So the benchmarks can time the primitives underneath the public operations, which
-         is where an operation's cost turns out to sit. -->
     <InternalsVisibleTo Include="Benchmarks" />
   </ItemGroup>
 

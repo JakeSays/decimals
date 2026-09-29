@@ -4,17 +4,24 @@
 namespace Decimals.Internal;
 
 /// <summary>
-/// The engine's operations shaped as expressions: each takes its result slot from the
+/// The wide-number operations in expression form. Each takes its result slot from the
 /// arena, so a series can be written the way it reads on paper.
 /// </summary>
 /// <remarks>
-/// These are thin. Everything they do is in <see cref="Decimal32WideArithmetic"/>,
-/// <see cref="Decimal32WideMultiply"/>, <see cref="Decimal32WideDivide"/>,
-/// <see cref="Decimal32WideSquareRoot"/>, and <see cref="Decimal32WideRounding"/>; what they add is
-/// somewhere to put the result.
+/// These methods are thin wrappers. The work is done in
+/// <see cref="Decimal32WideArithmetic"/>, <see cref="Decimal32WideMultiply"/>,
+/// <see cref="Decimal32WideDivide"/>, <see cref="Decimal32WideSquareRoot"/>, and
+/// <see cref="Decimal32WideRounding"/>. The wrappers provide a slot for the result.
 /// </remarks>
 internal static unsafe class Decimal32WideMath
 {
+    /// <summary>Adds two values and rounds the sum to the context.</summary>
+    /// <param name="arena">The arena that provides the result slot and a work buffer.</param>
+    /// <param name="left">The first operand.</param>
+    /// <param name="right">The second operand.</param>
+    /// <param name="context">The precision, rounding, and exponent limits to apply.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The rounded sum, in a new slot the caller holds.</returns>
     public static Decimal32WideNumber Add(ref Decimal32WideArena arena, Decimal32WideNumber left, Decimal32WideNumber right,
         Decimal32WideContext context, ref Decimal32Status status)
     {
@@ -24,11 +31,18 @@ internal static unsafe class Decimal32WideMath
 
         Decimal32WideArithmetic.Add(ref result, left, right, false, context, ref status, work);
 
-        // The work slot goes back; the result's does not, since the caller holds it.
+        // Release the work slot. The result's slot stays taken, because the caller holds it.
         arena.Release(mark + 1);
         return result;
     }
 
+    /// <summary>Subtracts the second value from the first and rounds the difference to the context.</summary>
+    /// <param name="arena">The arena that provides the result slot and a work buffer.</param>
+    /// <param name="left">The value to subtract from.</param>
+    /// <param name="right">The value to subtract.</param>
+    /// <param name="context">The precision, rounding, and exponent limits to apply.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The rounded difference, in a new slot the caller holds.</returns>
     public static Decimal32WideNumber Subtract(ref Decimal32WideArena arena, Decimal32WideNumber left, Decimal32WideNumber right,
         Decimal32WideContext context, ref Decimal32Status status)
     {
@@ -42,15 +56,22 @@ internal static unsafe class Decimal32WideMath
         return result;
     }
 
+    /// <summary>Multiplies two values and rounds the product to the context.</summary>
+    /// <param name="arena">The arena that provides the result slot and a work buffer.</param>
+    /// <param name="left">The first factor.</param>
+    /// <param name="right">The second factor.</param>
+    /// <param name="context">The precision, rounding, and exponent limits to apply.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The rounded product, in a new slot the caller holds.</returns>
     public static Decimal32WideNumber Multiply(ref Decimal32WideArena arena, Decimal32WideNumber left, Decimal32WideNumber right,
         Decimal32WideContext context, ref Decimal32Status status)
     {
         var mark = arena.Mark;
         var result = arena.Take();
 
-        if (!TryMultiplySpecial(ref result, left, right, ref status))
+        if (!MultiplySpecial(ref result, left, right, ref status))
         {
-            // The accumulator counts in words rather than units, so it needs twice the
+            // The accumulator counts 64-bit words, not 32-bit units, so it needs twice the
             // slots the product's columns would suggest.
             var accumulator = (ulong*)arena.TakeUnits(4);
             Decimal32WideMultiply.Multiply(ref result, left, right, accumulator);
@@ -64,6 +85,13 @@ internal static unsafe class Decimal32WideMath
         return result;
     }
 
+    /// <summary>Divides the first value by the second and rounds the quotient to the context.</summary>
+    /// <param name="arena">The arena that provides the result slot and work buffers.</param>
+    /// <param name="left">The dividend.</param>
+    /// <param name="right">The divisor.</param>
+    /// <param name="context">The precision, rounding, and exponent limits to apply.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The rounded quotient, in a new slot the caller holds.</returns>
     public static Decimal32WideNumber Divide(ref Decimal32WideArena arena, Decimal32WideNumber left, Decimal32WideNumber right,
         Decimal32WideContext context, ref Decimal32Status status)
     {
@@ -80,6 +108,12 @@ internal static unsafe class Decimal32WideMath
         return result;
     }
 
+    /// <summary>The square root of a value, rounded to the context.</summary>
+    /// <param name="arena">The arena that provides the result slot and work buffers.</param>
+    /// <param name="value">The operand.</param>
+    /// <param name="context">The precision, rounding, and exponent limits to apply.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <returns>The rounded square root, in a new slot the caller holds.</returns>
     public static Decimal32WideNumber SquareRoot(ref Decimal32WideArena arena, Decimal32WideNumber value,
         Decimal32WideContext context, ref Decimal32Status status)
     {
@@ -96,10 +130,19 @@ internal static unsafe class Decimal32WideMath
     }
 
     /// <summary>
-    /// Rounds a value into the context, which is decNumber's <c>decCopyFit</c> followed by
-    /// <c>decFinish</c>. The series finish this way, having computed far more digits than
+    /// Rounds a value to the context: decNumber's <c>decCopyFit</c> followed by
+    /// <c>decFinish</c>. The series finish this way, after computing many more digits than
     /// they return.
     /// </summary>
+    /// <param name="arena">The arena that provides the result slot.</param>
+    /// <param name="value">The value to round.</param>
+    /// <param name="residue">
+    /// The residue of the digits already discarded below <paramref name="value"/>, in the
+    /// form <see cref="Decimal32WideRounding"/> describes. 0 means none were discarded.
+    /// </param>
+    /// <param name="context">The precision, rounding, and exponent limits to apply.</param>
+    /// <param name="status">Receives the conditions the rounding raises.</param>
+    /// <returns>The rounded value, in a new slot the caller holds.</returns>
     public static Decimal32WideNumber Round(ref Decimal32WideArena arena, Decimal32WideNumber value, int residue,
         Decimal32WideContext context, ref Decimal32Status status)
     {
@@ -120,21 +163,37 @@ internal static unsafe class Decimal32WideMath
         return result;
     }
 
+    /// <summary>Compares two values numerically. Neither may be a NaN.</summary>
+    /// <param name="left">The first value.</param>
+    /// <param name="right">The second value.</param>
+    /// <param name="ignoreSigns">True to compare magnitudes instead of signed values.</param>
+    /// <returns>-1 if <paramref name="left"/> is smaller, 0 if they are equal, or 1 if it is larger.</returns>
     public static int Compare(Decimal32WideNumber left, Decimal32WideNumber right, bool ignoreSigns)
     {
         return Decimal32WideArithmetic.Compare(left, right, ignoreSigns);
     }
 
+    /// <summary>Creates a value from an integer.</summary>
+    /// <param name="arena">The arena that provides the slot.</param>
+    /// <param name="value">The integer.</param>
+    /// <returns>The integer as a wide number with exponent zero, in a new slot the caller holds.</returns>
     public static Decimal32WideNumber FromInt32(ref Decimal32WideArena arena, int value)
     {
         return Decimal32WideNumber.FromInt32(value, arena.TakeUnits());
     }
 
+    /// <summary>Creates the value 1.</summary>
+    /// <param name="arena">The arena that provides the slot.</param>
+    /// <returns>1 with exponent zero, in a new slot the caller holds.</returns>
     public static Decimal32WideNumber One(ref Decimal32WideArena arena)
     {
         return FromInt32(ref arena, 1);
     }
 
+    /// <summary>Creates an infinity.</summary>
+    /// <param name="arena">The arena that provides the slot.</param>
+    /// <param name="isNegative">True for negative infinity.</param>
+    /// <returns>The infinity, in a new slot the caller holds.</returns>
     public static Decimal32WideNumber Infinity(ref Decimal32WideArena arena, bool isNegative)
     {
         var result = arena.Take();
@@ -143,6 +202,9 @@ internal static unsafe class Decimal32WideMath
         return result;
     }
 
+    /// <summary>Creates a positive quiet NaN with no payload.</summary>
+    /// <param name="arena">The arena that provides the slot.</param>
+    /// <returns>The NaN, in a new slot the caller holds.</returns>
     public static Decimal32WideNumber QuietNaN(ref Decimal32WideArena arena)
     {
         var result = arena.Take();
@@ -151,9 +213,10 @@ internal static unsafe class Decimal32WideMath
     }
 
     /// <summary>
-    /// The specials a multiplication settles before any digits are looked at.
+    /// Handles the special values of a multiplication before any digits are read. Returns
+    /// true if <paramref name="result"/> was set.
     /// </summary>
-    private static bool TryMultiplySpecial(ref Decimal32WideNumber result, Decimal32WideNumber left,
+    private static bool MultiplySpecial(ref Decimal32WideNumber result, Decimal32WideNumber left,
         Decimal32WideNumber right, ref Decimal32Status status)
     {
         if (left.IsNaN)
@@ -175,7 +238,7 @@ internal static unsafe class Decimal32WideMath
 
         if ((left.IsInfinity && right.IsZero) || (right.IsInfinity && left.IsZero))
         {
-            // An infinity times a zero has no product.
+            // An infinity times zero is invalid.
             status |= Decimal32Status.InvalidOperation;
             result.SetZero();
             result.Kind = Decimal32Kind.QuietNaN;

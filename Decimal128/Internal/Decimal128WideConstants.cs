@@ -4,33 +4,37 @@
 namespace Decimals.Internal;
 
 /// <summary>
-/// The constants the elementary functions carry rather than iterate for, and the one
-/// question about a value that is decimal rather than arithmetic.
+/// Constants the elementary functions store instead of computing, and a test for whether a
+/// value is a power of two.
 /// </summary>
 internal static unsafe class Decimal128WideConstants
 {
     /// <summary>
-    /// ln(10) to forty digits, as base-billion units least significant first. Log10 divides
-    /// by this every time it runs, and decNumber carries it for the same reason.
+    /// ln(10) to 40 digits, as base-billion units, least significant first. Log10 divides by
+    /// this on every call, and decNumber stores it for the same reason.
     /// </summary>
     private static ReadOnlySpan<uint> NaturalLogOfTenUnits =>
     [
         364207601, 991454684, 45684017, 585092994, 2302
     ];
 
-    /// <summary>ln(2) to forty digits, carried for the same reason.</summary>
+    /// <summary>ln(2) to 40 digits, stored for the same reason.</summary>
     private static ReadOnlySpan<uint> NaturalLogOfTwoUnits =>
     [
         765680755, 321214581, 453094172, 471805599, 6931
     ];
 
-    /// <summary>ln(10), laid into a slot the caller owns.</summary>
+    /// <summary>Loads ln(10) into a buffer the caller owns.</summary>
+    /// <param name="lsu">The buffer for the coefficient's units. It must hold at least five units.</param>
+    /// <returns>ln(10) to 40 digits, with its coefficient in <paramref name="lsu"/>.</returns>
     public static Decimal128WideNumber NaturalLogOfTen(uint* lsu)
     {
         return Load(NaturalLogOfTenUnits, -39, lsu);
     }
 
-    /// <summary>ln(2), laid into a slot the caller owns.</summary>
+    /// <summary>Loads ln(2) into a buffer the caller owns.</summary>
+    /// <param name="lsu">The buffer for the coefficient's units. It must hold at least five units.</param>
+    /// <returns>ln(2) to 40 digits, with its coefficient in <paramref name="lsu"/>.</returns>
     public static Decimal128WideNumber NaturalLogOfTwo(uint* lsu)
     {
         return Load(NaturalLogOfTwoUnits, -40, lsu);
@@ -51,21 +55,22 @@ internal static unsafe class Decimal128WideConstants
     }
 
     /// <summary>
-    /// Whether the value is a power of two, and which.
+    /// Whether the value is an exact power of two, and if so, which power.
     /// </summary>
     /// <remarks>
     /// A decimal value is a coefficient times a power of ten, and ten is two times five. A
-    /// positive exponent therefore leaves a factor of five that no power of two has, so
-    /// only a zero or negative exponent can qualify: the coefficient has to carry exactly
-    /// as many fives as the exponent has, and what remains has to be a power of two.
+    /// positive exponent leaves a factor of five that no power of two has, so only an
+    /// exponent of zero or less can qualify. The coefficient must contain exactly as many
+    /// factors of five as the exponent's magnitude, and the rest must be a power of two.
     /// </remarks>
-    public static bool TryPowerOfTwoExponent(Decimal128WideNumber value, uint* work, out int exponent)
+    /// <param name="value">The value to test.</param>
+    /// <param name="work">A buffer at least as long as the value's coefficient. Its contents are overwritten.</param>
+    /// <returns>The power of two, or null if the value is not a positive power of two.</returns>
+    public static int? PowerOfTwoExponent(Decimal128WideNumber value, uint* work)
     {
-        exponent = 0;
-
         if (!value.IsFinite || value.IsNegative || value.IsZero || value.Exponent > 0)
         {
-            return false;
+            return null;
         }
 
         var length = value.Units;
@@ -74,31 +79,30 @@ internal static unsafe class Decimal128WideConstants
             work[index] = value.Lsu[index];
         }
 
-        // Take out one factor of five for each decade below the point; a remainder at any
-        // step means the value keeps a five, which no power of two does.
+        // Divide out one factor of five for each digit below the decimal point. A remainder
+        // at any step means the value has a factor of five, which no power of two has.
         var fives = -value.Exponent;
         for (var index = 0; index < fives; index++)
         {
             if (DivideBySmall(work, ref length, 5) != 0)
             {
-                return false;
+                return null;
             }
         }
 
-        // What is left has to be a power of two, and how many times it halves is the
-        // exponent, less the twos the denominator held.
+        // The rest must be a power of two. The number of halvings, minus the factors of two
+        // in the denominator, is the exponent.
         var twos = 0;
         while (true)
         {
             if (length == 1 && work[0] == 1)
             {
-                exponent = twos - fives;
-                return true;
+                return twos - fives;
             }
 
             if (DivideBySmall(work, ref length, 2) != 0)
             {
-                return false;
+                return null;
             }
 
             twos++;
@@ -106,7 +110,7 @@ internal static unsafe class Decimal128WideConstants
     }
 
     /// <summary>
-    /// Divides a unit array by a small divisor in place, handing back the remainder.
+    /// Divides a unit array by a small divisor in place, and returns the remainder.
     /// </summary>
     private static uint DivideBySmall(uint* units, ref int length, uint divisor)
     {

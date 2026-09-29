@@ -4,7 +4,7 @@
 namespace Decimals.Conformance;
 
 /// <summary>
-/// One space-delimited element of a testcase line, with any quoting already removed.
+/// One token of a test line, with quotes removed.
 /// </summary>
 public readonly struct DecTestToken
 {
@@ -17,8 +17,8 @@ public readonly struct DecTestToken
     public string Text { get; }
 
     /// <summary>
-    /// Quoting exists so a syntactically invalid numeric string can be written down, so a
-    /// quoted token is never read as one of the octothorpe notations.
+    /// True if the token was quoted. Quotes let a test case write an invalid numeric
+    /// string, so a quoted token is never read as one of the # notations.
     /// </summary>
     public bool IsQuoted { get; }
 }

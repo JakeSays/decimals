@@ -7,8 +7,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <!-- Decimal32 and Decimal64 are bit-manipulation heavy; pointers and stack buffers are
-         on the table where they earn their keep. -->
+    <!-- The decimal types do a lot of bit manipulation and use pointers and stack buffers
+         where those are faster. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>

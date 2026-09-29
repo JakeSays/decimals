@@ -4,9 +4,12 @@
 namespace Decimals.Conformance;
 
 /// <summary>
-/// Where a run's per-file lines go. The console runner prints them in the same shape as the
-/// C++ harness so the two runs can be diffed; the xunit theory leaves it null.
+/// Writes one result line per file.
 /// </summary>
+/// <remarks>
+/// The console runner prints the lines in the same layout as the C++ harness, so the two
+/// outputs can be compared with diff. The xunit tests pass no report.
+/// </remarks>
 public sealed class DecTestReport
 {
     private readonly Action<string> _write;

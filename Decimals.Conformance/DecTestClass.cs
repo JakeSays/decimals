@@ -7,8 +7,8 @@ namespace Decimals.Conformance;
 /// The ten results of the corpus's <c>class</c> operation.
 /// </summary>
 /// <remarks>
-/// Laid out in the order every decimal type in the repository uses for its own class
-/// enumeration, so a target converts between the two by a cast.
+/// Each decimal type's own class enum uses the same order, so a target converts between
+/// the two with a cast.
 /// </remarks>
 public enum DecTestClass
 {

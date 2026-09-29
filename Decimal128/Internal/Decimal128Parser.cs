@@ -14,40 +14,47 @@ namespace Decimals.Internal;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Syntax is stricter than .NET's numeric parsing: no leading or trailing space, no group
-/// separators, no culture-specific decimal point. A leading or trailing decimal point is
-/// allowed (<c>.5</c> and <c>5.</c> both parse), two are not. Infinities are <c>inf</c> or
-/// <c>infinity</c> in any casing; NaNs are <c>nan</c> or <c>snan</c> with an optional
-/// payload of digits, whose significant length may not exceed thirty-three.
+/// The syntax is stricter than .NET's numeric parsing: no leading or trailing spaces, no
+/// group separators, and no culture-specific decimal point. A leading or trailing decimal
+/// point is allowed (<c>.5</c> and <c>5.</c> both parse), but two points are not. An
+/// infinity is <c>inf</c> or <c>infinity</c>, in any case. A NaN is <c>nan</c> or
+/// <c>snan</c>, optionally followed by a payload of digits with at most 33 significant
+/// digits.
 /// </para>
 /// <para>
-/// A number of up to thirty-eight digits is read on one path: the digits are gathered into
-/// two words by <see cref="Decimal128DigitRun"/>, and the value goes straight to the
-/// finalizer. Anything longer takes the general path, which gathers thirty-eight significant
-/// digits and folds everything past them into a sticky residue -- which can only tip a
-/// rounding that discards at least four digits above it.
+/// A number of up to 38 digits takes the fast path. <see cref="Decimal128DigitRun"/>
+/// collects its digits into two words, and the value goes directly to the finalizer. Longer
+/// text takes the general path. It keeps 38 significant digits and folds the rest into a
+/// sticky residue. The residue only affects a rounding that discards at least 4 of the
+/// kept digits.
 /// </para>
 /// </remarks>
 [SkipLocalsInit]
 internal static class Decimal128Parser
 {
     /// <summary>
-    /// An exponent past this cannot be reached by any value, so parsing clamps to it
-    /// rather than overflowing the arithmetic that computes it.
+    /// No value can reach an exponent beyond this, so parsing clamps the exponent to it
+    /// instead of letting the arithmetic overflow.
     /// </summary>
     private const int ExponentLimit = 1000000000;
 
     /// <summary>
-    /// Text up to this length is widened or rewritten on the stack; anything longer is
-    /// rented. The limit covers every number the format can hold, so renting is for
-    /// pathological input.
+    /// Text up to this length is converted or rewritten in a stack buffer. Longer text uses
+    /// a rented array. The limit covers every number the format can represent, so only
+    /// unusual input needs a rented array.
     /// </summary>
     private const int StackBufferLength = 128;
 
     /// <summary>
-    /// The conversion a culture asks for: the text is rewritten into the specification's
-    /// grammar and then read by it, so one parser still computes every value.
+    /// Parses text in a culture's format. The text is rewritten into the specification's
+    /// syntax and then parsed, so one parser computes every value.
     /// </summary>
+    /// <param name="text">The culture-formatted text.</param>
+    /// <param name="styles">The styles allowed in the text.</param>
+    /// <param name="provider">The culture's symbols, or null for the current culture.</param>
+    /// <param name="rounding">The rounding mode for a value with too many digits.</param>
+    /// <param name="status">Receives ConversionSyntax if the text is invalid, and the conditions the rounding raises.</param>
+    /// <returns>The encoded value, or a quiet NaN if the text is invalid.</returns>
     public static Decimal128Integer Parse(ReadOnlySpan<char> text, NumberStyles styles, IFormatProvider? provider,
         Decimal128Rounding rounding, ref Decimal128Status status)
     {
@@ -61,7 +68,7 @@ internal static class Decimal128Parser
 
         try
         {
-            if (!Decimal128CultureNormalizer.TryNormalize(text, styles, numberFormat, buffer, out var written))
+            if (Decimal128CultureNormalizer.Normalize(text, styles, numberFormat, buffer) is not { } written)
             {
                 return Malformed(ref status);
             }
@@ -78,9 +85,16 @@ internal static class Decimal128Parser
     }
 
     /// <summary>
-    /// The same, over UTF-8. A culture's symbols need not be ASCII -- an infinity is
-    /// <c>∞</c> in most of them -- so this decodes rather than narrowing.
+    /// Parses UTF-8 text in a culture's format. A culture's symbols can be non-ASCII (most
+    /// cultures use <c>∞</c> for infinity), so this decodes the text instead of narrowing
+    /// each byte.
     /// </summary>
+    /// <param name="utf8Text">The culture-formatted UTF-8 text.</param>
+    /// <param name="styles">The styles allowed in the text.</param>
+    /// <param name="provider">The culture's symbols, or null for the current culture.</param>
+    /// <param name="rounding">The rounding mode for a value with too many digits.</param>
+    /// <param name="status">Receives ConversionSyntax if the text is invalid, and the conditions the rounding raises.</param>
+    /// <returns>The encoded value, or a quiet NaN if the text is invalid.</returns>
     public static Decimal128Integer Parse(ReadOnlySpan<byte> utf8Text, NumberStyles styles, IFormatProvider? provider,
         Decimal128Rounding rounding, ref Decimal128Status status)
     {
@@ -110,10 +124,13 @@ internal static class Decimal128Parser
     }
 
     /// <summary>
-    /// The specification's grammar over UTF-8 text. Every character it accepts is ASCII, so
-    /// a byte outside that range cannot appear in a number and the text is rejected without
-    /// being decoded.
+    /// Parses UTF-8 text in the specification's syntax. The syntax is all ASCII, so text
+    /// with any byte above 0x7F is rejected without being decoded.
     /// </summary>
+    /// <param name="utf8Text">The UTF-8 text.</param>
+    /// <param name="rounding">The rounding mode for a value with too many digits.</param>
+    /// <param name="status">Receives ConversionSyntax if the text is invalid, and the conditions the rounding raises.</param>
+    /// <returns>The encoded value, or a quiet NaN if the text is invalid.</returns>
     public static Decimal128Integer Parse(ReadOnlySpan<byte> utf8Text, Decimal128Rounding rounding,
         ref Decimal128Status status)
     {
@@ -146,6 +163,11 @@ internal static class Decimal128Parser
         }
     }
 
+    /// <summary>Parses text in the specification's syntax: the to-number conversion.</summary>
+    /// <param name="text">The text.</param>
+    /// <param name="rounding">The rounding mode for a value with too many digits.</param>
+    /// <param name="status">Receives ConversionSyntax if the text is invalid, and the conditions the rounding raises.</param>
+    /// <returns>The encoded value, or a quiet NaN if the text is invalid.</returns>
     public static Decimal128Integer Parse(ReadOnlySpan<char> text, Decimal128Rounding rounding,
         ref Decimal128Status status)
     {
@@ -174,8 +196,8 @@ internal static class Decimal128Parser
             return Malformed(ref status);
         }
 
-        // A finite number begins with a digit or a point, and every special form begins
-        // with a letter, so one comparison decides which grammar applies.
+        // A finite number starts with a digit or a point, and every special value starts
+        // with a letter, so one comparison chooses the path.
         var lead = Unsafe.Add(ref start, index);
         if ((uint)(lead - '0') > 9 && lead != '.')
         {
@@ -196,8 +218,8 @@ internal static class Decimal128Parser
 
         if (run.Digits > Decimal128DigitRun.Capacity)
         {
-            // More digits than two words gather, leading zeros included: the general path
-            // counts significant digits and folds the rest into a residue.
+            // There are more digits than two words hold, counting leading zeros. The
+            // general path counts only significant digits and folds the rest into a residue.
             return ParseLong(text[(negative || start == '+' ? 1 : 0)..], negative, rounding, ref status);
         }
 
@@ -215,7 +237,7 @@ internal static class Decimal128Parser
             }
 
             index++;
-            if (!TryReadExponent(ref start, ref index, length, out exponent))
+            if (!ReadExponent(ref start, ref index, length, out exponent))
             {
                 return Malformed(ref status);
             }
@@ -227,10 +249,10 @@ internal static class Decimal128Parser
     }
 
     /// <summary>
-    /// Reads the exponent after the E through to the end of the text: an optional sign and
-    /// at least one digit, clamped rather than overflowed.
+    /// Reads the exponent after the E, up to the end of the text: an optional sign and at
+    /// least one digit. A large exponent is clamped instead of overflowing.
     /// </summary>
-    private static bool TryReadExponent(ref char start, ref int index, int length, out int exponent)
+    private static bool ReadExponent(ref char start, ref int index, int length, out int exponent)
     {
         exponent = 0;
         if (index == length)
@@ -292,10 +314,9 @@ internal static class Decimal128Parser
     }
 
     /// <summary>
-    /// The general path, for text with more digit characters than two words gather. Leading
-    /// zeros carry no information beyond their position, and digits past the thirty-eighth
-    /// significant one cannot change the result beyond making it inexact, so they are folded
-    /// into a sticky residue rather than accumulated.
+    /// The general path, for text with more digits than two words hold. Leading zeros only
+    /// affect the position. Digits after the 38th significant digit can only make the result
+    /// inexact, so they are folded into a sticky residue instead of added to the coefficient.
     /// </summary>
     private static Decimal128Integer ParseLong(ReadOnlySpan<char> text, bool negative, Decimal128Rounding rounding,
         ref Decimal128Status status)
@@ -366,21 +387,21 @@ internal static class Decimal128Parser
 
             position++;
             ref var start = ref MemoryMarshal.GetReference(text);
-            if (!TryReadExponent(ref start, ref position, text.Length, out exponent))
+            if (!ReadExponent(ref start, ref position, text.Length, out exponent))
             {
                 return Malformed(ref status);
             }
         }
 
-        // Digits folded into the sticky flag were dropped from the coefficient, so the
-        // exponent has to account for them.
+        // The digits folded into the residue are not in the coefficient, so the exponent is
+        // increased by their count.
         var residue = droppedNonZero ? Decimal128Residue.BelowHalf : Decimal128Residue.Exact;
         var scale = Math.Clamp((long)exponent - fractionDigits + droppedCount, -ExponentLimit, ExponentLimit);
 
         return Decimal128Finalizer.Finalize(negative, run.ToCoefficient(), (int)scale, residue, rounding, ref status);
     }
 
-    /// <summary>One significant digit into the run, on the general path's own count.</summary>
+    /// <summary>Adds one significant digit to the run. The general path uses this instead of <see cref="Decimal128DigitRun.Read"/>.</summary>
     private static void Gather(ref Decimal128DigitRun run, uint digit)
     {
         if (run.Digits < Decimal128DigitRun.WordDigits)

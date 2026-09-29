@@ -3,34 +3,33 @@
 
 using System.Globalization;
 
-
 namespace Decimals.Internal;
 
 /// <summary>
-/// Rewrites culture-formatted text into the grammar the specification's <c>to-number</c>
-/// reads, so that one parser computes every value.
+/// Converts culture-formatted text into the syntax that the specification's
+/// <c>to-number</c> operation reads, so one parser computes every value.
 /// </summary>
 /// <remarks>
-/// The scan knows about whitespace, signs, separators, and the currency symbol. Everything
-/// else it copies through for the parser to judge, which keeps the numeric semantics -- what
-/// counts as significant, how the coefficient rounds, where the exponent lands -- in the one
-/// place they are written. The specification's own spellings survive that copy, so
-/// <c>Infinity</c>, <c>sNaN</c>, and a NaN payload still parse under any culture.
+/// The scan handles whitespace, signs, separators, and the currency symbol. It copies
+/// digits, the exponent, and ASCII letters to the parser, which decides whether they are
+/// valid. This keeps the numeric rules (which digits are significant, how the coefficient
+/// rounds, what the exponent is) in one place. The specification's own spellings are
+/// copied too, so <c>Infinity</c>, <c>sNaN</c>, and a NaN payload parse under any culture.
 /// </remarks>
 internal static class Decimal64CultureNormalizer
 {
     /// <summary>
     /// The output is never longer than the input plus a sign, except for the infinity and
-    /// NaN symbols, which are written out in full. No destination shorter than this.
+    /// NaN symbols, which are written in full. The destination must be at least this long.
     /// </summary>
     public const int MinimumBufferLength = 16;
 
-    /// <summary>The styles .NET reads a floating-point type with when none are named.</summary>
+    /// <summary>The styles .NET uses to parse a floating-point type when none are given.</summary>
     public const NumberStyles DefaultStyles = NumberStyles.Float | NumberStyles.AllowThousands;
 
     /// <summary>
-    /// The styles that mean something for a decimal format. The two integer specifiers are
-    /// not among them, which is what the built-in floating-point types also refuse.
+    /// The styles that apply to a decimal format. The hex and binary specifiers are
+    /// excluded, as they are for the built-in floating-point types.
     /// </summary>
     private const NumberStyles SupportedStyles =
         NumberStyles.AllowLeadingWhite | NumberStyles.AllowTrailingWhite
@@ -40,10 +39,13 @@ internal static class Decimal64CultureNormalizer
         | NumberStyles.AllowCurrencySymbol;
 
     /// <summary>
-    /// Rejects styles a decimal format cannot honor, before any text is looked at. This
-    /// throws rather than reporting a failed parse, because a bad style is the caller's
-    /// mistake and not the input's.
+    /// Rejects styles that a decimal format cannot support, before any text is read. It
+    /// throws instead of returning a failed parse, because a bad style is the caller's
+    /// error, not the input's.
     /// </summary>
+    /// <param name="styles">The styles to check.</param>
+    /// <param name="parameterName">The caller's parameter name, reported in the exception.</param>
+    /// <exception cref="ArgumentException"><paramref name="styles"/> includes a style a decimal format does not support.</exception>
     public static void ValidateStyles(NumberStyles styles, string parameterName)
     {
         if ((styles & ~SupportedStyles) != 0)
@@ -53,14 +55,27 @@ internal static class Decimal64CultureNormalizer
         }
     }
 
-    public static bool TryNormalize(ReadOnlySpan<char> text, NumberStyles styles,
-        NumberFormatInfo numberFormat, Span<char> destination, out int written)
+    /// <summary>
+    /// Rewrites culture-formatted text into the specification's syntax. The result is only
+    /// rewritten, not validated: the parser decides whether it is a number.
+    /// </summary>
+    /// <param name="text">The culture-formatted text.</param>
+    /// <param name="styles">The styles allowed in the text.</param>
+    /// <param name="numberFormat">The culture's symbols.</param>
+    /// <param name="destination">
+    /// Receives the rewritten text. It must hold at least <see cref="MinimumBufferLength"/>
+    /// characters and one more character than <paramref name="text"/>.
+    /// </param>
+    /// <returns>
+    /// The number of characters written, or null if the destination is too short or the
+    /// text uses a symbol the styles do not allow.
+    /// </returns>
+    public static int? Normalize(ReadOnlySpan<char> text, NumberStyles styles, NumberFormatInfo numberFormat,
+        Span<char> destination)
     {
-        written = 0;
-
         if (destination.Length < MinimumBufferLength || destination.Length < text.Length + 1)
         {
-            return false;
+            return null;
         }
 
         var body = text;
@@ -74,9 +89,9 @@ internal static class Decimal64CultureNormalizer
             body = body.TrimEnd();
         }
 
-        if (TryWriteSpecial(body, numberFormat, destination, out written))
+        if (WriteCultureSymbol(body, numberFormat, destination) is { } symbolLength)
         {
-            return true;
+            return symbolLength;
         }
 
         var isNegative = false;
@@ -90,15 +105,15 @@ internal static class Decimal64CultureNormalizer
             body = body[1..^1].Trim();
         }
 
-        // A currency symbol can sit on either side of the sign, so the two are taken in
-        // both orders: "-$5" and "$-5" both read.
+        // A currency symbol can come before or after the sign, so both orders are accepted:
+        // "-$5" and "$-5" both parse.
         TakeCurrencySymbol(ref body, styles, numberFormat);
         TakeSign(ref body, styles, numberFormat, ref isNegative, ref hasSign);
         TakeCurrencySymbol(ref body, styles, numberFormat);
 
         if (body.IsEmpty)
         {
-            return false;
+            return null;
         }
 
         var decimalSeparator = (styles & NumberStyles.AllowCurrencySymbol) != 0
@@ -127,7 +142,7 @@ internal static class Decimal64CultureNormalizer
             {
                 if ((styles & NumberStyles.AllowDecimalPoint) == 0)
                 {
-                    return false;
+                    return null;
                 }
 
                 sawDecimalSeparator = true;
@@ -138,14 +153,14 @@ internal static class Decimal64CultureNormalizer
 
             if (StartsWith(rest, groupSeparator))
             {
-                // A group separator belongs to the integer part and needs a digit ahead of
-                // it. Dropping it wherever it fell would read a German ".5" -- where the
-                // period is the group separator -- as 5. What follows it is not checked,
-                // which is also where the built-in types stop: "1,,5" and "5," both read.
+                // A group separator belongs to the integer part and must follow a digit.
+                // Otherwise German ".5", where the period is the group separator, would
+                // parse as 5. The character after the separator is not checked, which
+                // matches the built-in types: "1,,5" and "5," both parse.
                 if ((styles & NumberStyles.AllowThousands) == 0
                     || sawDecimalSeparator || sawExponent || !sawDigit)
                 {
-                    return false;
+                    return null;
                 }
 
                 position += groupSeparator.Length;
@@ -165,15 +180,14 @@ internal static class Decimal64CultureNormalizer
             {
                 if ((styles & NumberStyles.AllowExponent) == 0)
                 {
-                    return false;
+                    return null;
                 }
 
                 sawExponent = true;
                 destination[index++] = 'E';
                 position++;
 
-                // The exponent carries the culture's sign, which the specification writes
-                // as plain ASCII.
+                // The exponent uses the culture's sign. The specification uses an ASCII sign.
                 var exponent = body[position..];
                 if (StartsWith(exponent, numberFormat.NegativeSign))
                 {
@@ -189,50 +203,50 @@ internal static class Decimal64CultureNormalizer
                 continue;
             }
 
-            // Only the specification's own words can still be standing here: Infinity, inf,
-            // NaN, and sNaN, none of which a culture spells for itself. Everything else is
-            // rejected rather than copied through, because the parser downstream has rules
-            // of its own -- it takes a leading sign unconditionally, and a period as a
-            // point. Neither is authorized here: a sign the styles allow was taken off the
-            // ends already, and a period means nothing in a culture that does not use one.
+            // The only valid text left here is the specification's own words: Infinity,
+            // inf, NaN, and sNaN. No culture has its own spelling for them. Any other
+            // character is rejected instead of copied, because the parser has its own
+            // rules: it always accepts a leading sign, and it treats a period as the
+            // decimal point. Neither is allowed here. A sign the styles allow was already
+            // removed from the ends, and a period means nothing in a culture that does not
+            // use one.
             if (!char.IsAsciiLetter(character))
             {
-                return false;
+                return null;
             }
 
             destination[index++] = character;
             position++;
         }
 
-        written = index;
-        return true;
+        return index;
     }
 
     /// <summary>
-    /// The three symbols a culture spells for itself. Anything else -- including the
-    /// specification's own words, a signaling NaN, and a NaN payload -- goes through the
-    /// scan instead.
+    /// Writes the three symbols that a culture defines: NaN, positive infinity, and
+    /// negative infinity. Everything else, including the specification's own words, a
+    /// signaling NaN, and a NaN payload, goes through the scan. The result is the number
+    /// of characters written, or null if the text is none of the three symbols.
     /// </summary>
-    private static bool TryWriteSpecial(ReadOnlySpan<char> text, NumberFormatInfo numberFormat,
-        Span<char> destination, out int written)
+    private static int? WriteCultureSymbol(ReadOnlySpan<char> text, NumberFormatInfo numberFormat,
+        Span<char> destination)
     {
         if (Matches(text, numberFormat.NaNSymbol))
         {
-            return Write("NaN", destination, out written);
+            return Write("NaN", destination);
         }
 
         if (Matches(text, numberFormat.PositiveInfinitySymbol))
         {
-            return Write("Infinity", destination, out written);
+            return Write("Infinity", destination);
         }
 
         if (Matches(text, numberFormat.NegativeInfinitySymbol))
         {
-            return Write("-Infinity", destination, out written);
+            return Write("-Infinity", destination);
         }
 
-        written = 0;
-        return false;
+        return null;
     }
 
     private static void TakeSign(ref ReadOnlySpan<char> body, NumberStyles styles,
@@ -300,15 +314,14 @@ internal static class Decimal64CultureNormalizer
         }
     }
 
-    private static bool Write(ReadOnlySpan<char> text, Span<char> destination, out int written)
+    private static int Write(ReadOnlySpan<char> text, Span<char> destination)
     {
         text.CopyTo(destination);
-        written = text.Length;
-        return true;
+        return text.Length;
     }
 
-    // An empty separator or symbol matches nothing. A culture is free to leave one blank,
-    // and a match on it would consume no input and never end.
+    // An empty separator or symbol matches nothing. A culture can leave one empty, and
+    // matching it would consume no input, so the scan would never end.
 
     private static bool StartsWith(ReadOnlySpan<char> text, string word) =>
         word.Length > 0 && text.StartsWith(word, StringComparison.Ordinal);

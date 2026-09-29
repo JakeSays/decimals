@@ -4,29 +4,35 @@
 namespace Decimals.Internal;
 
 /// <summary>
-/// Shortening a coefficient and settling it into a context: decNumber's <c>decSetCoeff</c>,
-/// <c>decApplyRound</c>, <c>decFinalize</c>, and <c>decSetSubnormal</c>, on unit arrays.
+/// Shortens a coefficient and fits it to a context: decNumber's <c>decSetCoeff</c>,
+/// <c>decApplyRound</c>, <c>decFinalize</c>, and <c>decSetSubnormal</c>, on wide numbers.
 /// </summary>
 /// <remarks>
-/// The residue is decNumber's: a small integer standing for everything discarded so far.
-/// Zero means exact, 1 means something non-zero below the last digit kept, 5 means exactly
-/// half, and values between say which side of half. A negative residue means the discarded
-/// part was subtracted rather than added, which only the alignment in addition produces.
+/// The residue is decNumber's: a small integer that represents all the digits discarded so
+/// far. 0 means nothing non-zero was discarded. 1 means a non-zero amount below the digit
+/// after the last one kept. 5 means exactly half. Other values below 5 mean below half, and
+/// values above 5 mean above half. A negative residue means the discarded part was
+/// subtracted instead of added, which only alignment in addition produces.
 /// </remarks>
 internal static unsafe class Decimal32WideRounding
 {
     /// <summary>
-    /// What a discarded leading digit contributes to the residue, which is decNumber's
-    /// <c>DECSTICKYTAB</c>. The residue only has to say which side of half the discarded
-    /// part falls on, so the digits collapse to four outcomes: nothing, below half, exactly
-    /// half, and above.
+    /// The residue contribution of the first discarded digit: decNumber's
+    /// <c>DECSTICKYTAB</c>. The residue only needs to show where the discarded part is
+    /// relative to half, so the digits map to four results: zero, below half, exactly half,
+    /// and above half.
     /// </summary>
     private static ReadOnlySpan<int> ResidueMap => [0, 3, 3, 3, 3, 5, 7, 7, 7, 7];
 
     /// <summary>
-    /// Shortens a coefficient to <paramref name="digits"/> digits, folding what goes with
-    /// it into the residue. decNumber's <c>decSetCoeff</c>.
+    /// Shortens a coefficient to <paramref name="digits"/> digits and adds the discarded
+    /// digits to the residue: decNumber's <c>decSetCoeff</c>. Sets Rounded when digits are
+    /// discarded and Inexact when the residue is not zero.
     /// </summary>
+    /// <param name="value">The value to shorten. Its exponent is raised by the number of digits discarded.</param>
+    /// <param name="digits">The number of digits to keep.</param>
+    /// <param name="residue">The residue so far. Receives the residue after the discarded digits are added.</param>
+    /// <param name="status">Receives the conditions the shortening raises.</param>
     public static void SetCoefficient(ref Decimal32WideNumber value, int digits, ref int residue,
         ref Decimal32Status status)
     {
@@ -46,14 +52,14 @@ internal static unsafe class Decimal32WideRounding
 
         if (residue > 1)
         {
-            // Whatever the residue described is now further to the right than the digits
-            // about to go, so it can only be a sticky bit.
+            // The old residue is now below all the digits being discarded, so it only
+            // matters as a sticky bit.
             residue = 1;
         }
 
         if (discard > value.Digits)
         {
-            // Everything goes, and then some: the guard digit is a zero the value never had.
+            // Every digit is discarded, and the guard digit is a zero above the coefficient.
             if (residue <= 0 && !value.IsZero)
             {
                 residue = 1;
@@ -93,9 +99,15 @@ internal static unsafe class Decimal32WideRounding
     }
 
     /// <summary>
-    /// Acts on a pending residue while keeping the coefficient's length, except for the two
-    /// carries that cannot. decNumber's <c>decApplyRound</c>.
+    /// Applies a pending residue to the last digit, keeping the coefficient's length:
+    /// decNumber's <c>decApplyRound</c>. An increment of all nines and a decrement of a power
+    /// of ten change the exponent instead of the length.
     /// </summary>
+    /// <param name="value">The value to round. It already has its final number of digits.</param>
+    /// <param name="residue">The residue of the digits discarded below <paramref name="value"/>.</param>
+    /// <param name="context">The rounding mode and exponent limits to apply.</param>
+    /// <param name="status">Receives Clamped if a decrement at the bottom of the range is clamped.</param>
+    /// <param name="overflowed">Receives true if an increment raised the exponent beyond the context's limit.</param>
     public static void ApplyRound(ref Decimal32WideNumber value, int residue, Decimal32WideContext context,
         ref Decimal32Status status, out bool overflowed)
     {
@@ -115,7 +127,8 @@ internal static unsafe class Decimal32WideRounding
         {
             if (Decimal32WideUnits.IsAllNines(value.Lsu, value.Units, value.Digits))
             {
-                // All nines: 999 becomes 100 one decade up, rather than growing a digit.
+                // All nines: 999 becomes 100 with the exponent raised by one, instead of
+                // gaining a digit.
                 value.Units = Decimal32WideUnits.SetPowerOfTen(value.Lsu, value.Digits - 1);
                 value.Exponent++;
 
@@ -134,15 +147,15 @@ internal static unsafe class Decimal32WideRounding
 
         if (Decimal32WideUnits.IsPowerOfTen(value.Lsu, value.Units, value.Digits))
         {
-            // The mirror case: 100 becomes 999 one decade down.
+            // The opposite case: 100 becomes 999 with the exponent lowered by one.
             var digits = value.Digits;
             value.Units = Decimal32WideUnits.SetNines(value.Lsu, digits);
             value.Exponent--;
 
             if (value.Exponent + 1 == context.MinExponent - context.Digits + 1)
             {
-                // The decade below was Etiny, so the value gets clamped back up and the
-                // last nine drops off again.
+                // The new exponent is below Etiny, so the exponent is clamped back up and the
+                // last nine is removed.
                 if (digits == 1)
                 {
                     value.SetZero();
@@ -160,7 +173,7 @@ internal static unsafe class Decimal32WideRounding
             return;
         }
 
-        // Stepping down by one, which keeps the length in every case the mirror above
+        // Subtract one. This keeps the length in every case the power-of-ten case above
         // does not cover.
         var one = stackalloc uint[1];
         *one = 1;
@@ -170,7 +183,8 @@ internal static unsafe class Decimal32WideRounding
     }
 
     /// <summary>
-    /// Which way a pending residue moves the last digit, under each rounding mode.
+    /// The direction a pending residue moves the last digit under the rounding mode: 1 up,
+    /// -1 down, or 0 unchanged.
     /// </summary>
     private static int Bump(Decimal32WideNumber value, int residue, Decimal32Rounding rounding)
     {
@@ -179,8 +193,8 @@ internal static unsafe class Decimal32WideRounding
         switch (rounding)
         {
             case Decimal32Rounding.ZeroFiveUp:
-                // Down, unless the last digit is one the mode moves; a subtractive residue
-                // takes it down instead, unless that would be a no-op.
+                // Round toward zero, but increment if the last digit is 0 or 5. A negative
+                // residue decrements, unless the last digit is 1 or 6.
                 if (residue < 0 && lastDigit % 5 != 1)
                 {
                     return -1;
@@ -220,16 +234,20 @@ internal static unsafe class Decimal32WideRounding
     }
 
     /// <summary>
-    /// Settles a coefficient of final length into the context, applying any pending round
-    /// and then the exponent limits. decNumber's <c>decFinalize</c>.
+    /// Fits a coefficient of final length to the context. Applies any pending rounding, then
+    /// the exponent limits: decNumber's <c>decFinalize</c>.
     /// </summary>
+    /// <param name="value">The value to fit. It already has at most the context's number of digits.</param>
+    /// <param name="residue">The residue of the digits discarded below <paramref name="value"/>.</param>
+    /// <param name="context">The precision, rounding, and exponent limits to apply.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
     public static void Finalize(ref Decimal32WideNumber value, int residue, Decimal32WideContext context,
         ref Decimal32Status status)
     {
         var tinyExponent = context.MinExponent - value.Digits + 1;
 
-        // Subnormal is decided before the pending round, since that round could carry the
-        // value up to Nmin or drop it to zero and cover the fact up.
+        // Subnormal is decided before the pending rounding, because that rounding could
+        // carry the value up to Nmin or reduce it to zero and hide that it was subnormal.
         if (value.Exponent <= tinyExponent)
         {
             if (value.Exponent < tinyExponent)
@@ -238,8 +256,8 @@ internal static unsafe class Decimal32WideRounding
                 return;
             }
 
-            // Equal leaves one case: the value is exactly Nmin and the residue is
-            // subtractive, so rounding can still take it below.
+            // When the exponents are equal, one case remains: the value is exactly Nmin and
+            // the residue is negative, so rounding can still take it below Nmin.
             if (residue < 0 && Decimal32WideUnits.IsPowerOfTen(value.Lsu, value.Units, value.Digits))
             {
                 ApplyRound(ref value, residue, context, ref status, out _);
@@ -274,8 +292,8 @@ internal static unsafe class Decimal32WideRounding
             return;
         }
 
-        // In range, but only if the coefficient carries the extra magnitude as trailing
-        // zeros rather than the exponent.
+        // The value is in range only if the coefficient holds the extra magnitude as
+        // trailing zeros instead of the exponent.
         var shift = value.Exponent - (context.MaxExponent - context.Digits + 1);
         if (!value.IsZero)
         {
@@ -295,7 +313,7 @@ internal static unsafe class Decimal32WideRounding
 
         if (value.IsZero)
         {
-            // A zero is never subnormal, whatever its exponent; it just gets clamped.
+            // A zero is never subnormal, whatever its exponent. Its exponent is only clamped.
             if (value.Exponent < tiny)
             {
                 value.Exponent = tiny;
@@ -310,7 +328,8 @@ internal static unsafe class Decimal32WideRounding
         var adjust = tiny - value.Exponent;
         if (adjust <= 0)
         {
-            // 754's default rule: a subnormal underflows exactly when it is inexact.
+            // IEEE 754's default rule: a subnormal result underflows if and only if it is
+            // inexact.
             if ((status & Decimal32Status.Inexact) != 0)
             {
                 status |= Decimal32Status.Underflow;
@@ -331,8 +350,8 @@ internal static unsafe class Decimal32WideRounding
             status |= Decimal32Status.Underflow;
         }
 
-        // Rounding a run of nines up lengthens the coefficient by one; it fits, because the
-        // value was shortened a moment ago.
+        // Rounding up a run of nines raises the exponent by one. The coefficient is shifted
+        // back, which fits, because the value was just shortened.
         if (value.Exponent > tiny)
         {
             value.Units = Decimal32WideUnits.ShiftUp(value.Lsu, value.Units, 1);
@@ -342,22 +361,22 @@ internal static unsafe class Decimal32WideRounding
 
         if (value.IsZero)
         {
-            // Rounded to nothing, which by definition means the exponent was clamped.
+            // The value rounded to zero, which by definition means the exponent was clamped.
             status |= Decimal32Status.Clamped;
         }
     }
 
     /// <summary>
-    /// What overflow produces, which depends on the rounding mode: the modes that round
-    /// away from the value give an infinity, the ones that round toward it give the largest
-    /// finite the context allows.
+    /// Sets the overflow result, which depends on the rounding mode. Modes that round away
+    /// from zero for this sign give an infinity. Modes that round toward zero give the
+    /// largest finite value the context allows.
     /// </summary>
     private static void Overflowed(ref Decimal32WideNumber value, Decimal32WideContext context,
         ref Decimal32Status status)
     {
         if (value.IsZero)
         {
-            // A zero has no magnitude to overflow; only its exponent needs bringing back.
+            // A zero has no magnitude to overflow. Only its exponent is brought into range.
             var limit = context.Clamp
                 ? context.MaxExponent - (context.Digits - 1)
                 : context.MaxExponent;

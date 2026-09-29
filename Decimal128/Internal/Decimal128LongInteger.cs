@@ -6,30 +6,39 @@ using System.Runtime.CompilerServices;
 namespace Decimals.Internal;
 
 /// <summary>
-/// An unsigned integer in four machine words, for the intermediates that outgrow two:
-/// the exact product of two coefficients, which runs to sixty-eight digits, a dividend
-/// scaled by a power of ten, and the radicand of a square root, scaled to seventy.
+/// An unsigned integer in four 64-bit words, for intermediate values too large for two:
+/// the exact product of two coefficients (up to 68 digits), a dividend scaled by a power
+/// of ten, and a square root's radicand scaled to 70 digits.
 /// </summary>
 /// <remarks>
-/// Nothing here rounds. A value is built exactly, compared, added to or subtracted from
-/// another exactly, and then cut down to two words by <see cref="Decimal128Tables"/> or
-/// <see cref="Decimal128Divider"/>, which divide it a word at a time. Every member is
-/// marked to inline, and the comparisons are written without branches, for the reasons
-/// <see cref="Decimal128Integer"/> gives.
+/// Nothing here rounds. A value is built, compared, added, and subtracted exactly. Then
+/// <see cref="Decimal128Tables"/> or <see cref="Decimal128Divider"/> reduces it to two
+/// words by dividing one word at a time. Every member is marked for aggressive inlining,
+/// and the comparisons have no branches, for the reasons given in
+/// <see cref="Decimal128Integer"/>.
 /// </remarks>
 internal readonly struct Decimal128LongInteger : IEquatable<Decimal128LongInteger>
 {
-    /// <summary>Two to the sixty-fourth, which is what each word counts in against the one below.</summary>
+    /// <summary>2^64, the weight of each word relative to the word below it.</summary>
     private const double WordScale = 18446744073709551616.0;
 
+    /// <summary>The highest 64 bits.</summary>
     public readonly ulong Word3;
 
+    /// <summary>The second-highest 64 bits.</summary>
     public readonly ulong Word2;
 
+    /// <summary>The second-lowest 64 bits.</summary>
     public readonly ulong Word1;
 
+    /// <summary>The lowest 64 bits.</summary>
     public readonly ulong Word0;
 
+    /// <summary>Creates a value from its four words, highest first.</summary>
+    /// <param name="word3">The highest 64 bits.</param>
+    /// <param name="word2">The second-highest 64 bits.</param>
+    /// <param name="word1">The second-lowest 64 bits.</param>
+    /// <param name="word0">The lowest 64 bits.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Decimal128LongInteger(ulong word3, ulong word2, ulong word1, ulong word0)
     {
@@ -39,25 +48,31 @@ internal readonly struct Decimal128LongInteger : IEquatable<Decimal128LongIntege
         Word0 = word0;
     }
 
+    /// <summary>Widens a two-word value to four words.</summary>
+    /// <param name="value">The two-word value.</param>
+    /// <returns>The value, with zero upper words.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Decimal128LongInteger FromInteger(Decimal128Integer value)
     {
         return new Decimal128LongInteger(0, 0, value.High, value.Low);
     }
 
+    /// <summary>Whether the value is 0.</summary>
     public bool IsZero
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => (Word3 | Word2 | Word1 | Word0) == 0;
     }
 
-    /// <summary>Whether the value fits two words, in which case <see cref="ToInteger"/> is the whole of it.</summary>
+    /// <summary>Whether the value fits in two words. If it does, <see cref="ToInteger"/> returns all of it.</summary>
     public bool IsInteger
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => (Word3 | Word2) == 0;
     }
 
+    /// <summary>The low two words. They hold the whole value only if <see cref="IsInteger"/> is true.</summary>
+    /// <returns>The low 128 bits.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Decimal128Integer ToInteger()
     {
@@ -65,6 +80,9 @@ internal readonly struct Decimal128LongInteger : IEquatable<Decimal128LongIntege
     }
 
     /// <summary>The exact product of two two-word values.</summary>
+    /// <param name="left">The first factor.</param>
+    /// <param name="right">The second factor.</param>
+    /// <returns>The product, in four words.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Decimal128LongInteger Multiply(Decimal128Integer left, Decimal128Integer right)
     {
@@ -88,7 +106,9 @@ internal readonly struct Decimal128LongInteger : IEquatable<Decimal128LongIntege
         return new Decimal128LongInteger(high11 + carry2, word2, word1, low00);
     }
 
-    /// <summary>The exact square of a two-word value: three products, the cross one doubled.</summary>
+    /// <summary>The exact square of a two-word value. It uses three products and doubles the cross product.</summary>
+    /// <param name="value">The value to square.</param>
+    /// <returns>The square, in four words.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Decimal128LongInteger Square(Decimal128Integer value)
     {
@@ -112,10 +132,14 @@ internal readonly struct Decimal128LongInteger : IEquatable<Decimal128LongIntege
     }
 
     /// <summary>
-    /// The low four words of the product of a two-word value and a four-word one, which
-    /// the caller knows is all of it. The partial products that reach past the fourth
-    /// word are not formed, and the two that end in it are only formed as far as it.
+    /// The low four words of the product of a two-word value and a four-word value. The
+    /// caller must know the product fits in four words. Partial products that lie entirely
+    /// above the fourth word are skipped, and the two that end in the fourth word are
+    /// computed only up to it.
     /// </summary>
+    /// <param name="left">The two-word factor.</param>
+    /// <param name="right">The four-word factor.</param>
+    /// <returns>The product, in four words.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Decimal128LongInteger Multiply(Decimal128Integer left, Decimal128LongInteger right)
     {
@@ -145,7 +169,9 @@ internal readonly struct Decimal128LongInteger : IEquatable<Decimal128LongIntege
         return new Decimal128LongInteger(word3, word2, word1, word0);
     }
 
-    /// <summary>The product with a word, which the caller knows still fits four words.</summary>
+    /// <summary>The product with a word. The caller must know the product fits in four words.</summary>
+    /// <param name="multiplier">The word to multiply by.</param>
+    /// <returns>The product.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Decimal128LongInteger MultiplyBy(ulong multiplier)
     {
@@ -162,6 +188,10 @@ internal readonly struct Decimal128LongInteger : IEquatable<Decimal128LongIntege
         return new Decimal128LongInteger(word3, word2, word1, word0);
     }
 
+    /// <summary>The sum of two values. It wraps if the sum does not fit in four words.</summary>
+    /// <param name="left">The first value.</param>
+    /// <param name="right">The second value.</param>
+    /// <returns>The low 256 bits of the sum.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Decimal128LongInteger operator +(Decimal128LongInteger left, Decimal128LongInteger right)
     {
@@ -181,7 +211,10 @@ internal readonly struct Decimal128LongInteger : IEquatable<Decimal128LongIntege
         return new Decimal128LongInteger(left.Word3 + right.Word3 + carry2, word2, word1, word0);
     }
 
-    /// <summary>The difference, which wraps when the right operand is the larger.</summary>
+    /// <summary>The difference. It wraps if the right operand is larger.</summary>
+    /// <param name="left">The value to subtract from.</param>
+    /// <param name="right">The value to subtract.</param>
+    /// <returns>The difference, modulo 2^256.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Decimal128LongInteger operator -(Decimal128LongInteger left, Decimal128LongInteger right)
     {
@@ -201,6 +234,10 @@ internal readonly struct Decimal128LongInteger : IEquatable<Decimal128LongIntege
         return new Decimal128LongInteger(left.Word3 - right.Word3 - borrow2, word2, word1, word0);
     }
 
+    /// <summary>Whether two values are equal.</summary>
+    /// <param name="left">The first value.</param>
+    /// <param name="right">The second value.</param>
+    /// <returns>True if all four words are equal.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator ==(Decimal128LongInteger left, Decimal128LongInteger right)
     {
@@ -208,13 +245,20 @@ internal readonly struct Decimal128LongInteger : IEquatable<Decimal128LongIntege
             | (left.Word0 ^ right.Word0)) == 0;
     }
 
+    /// <summary>Whether two values differ.</summary>
+    /// <param name="left">The first value.</param>
+    /// <param name="right">The second value.</param>
+    /// <returns>True if any word differs.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator !=(Decimal128LongInteger left, Decimal128LongInteger right)
     {
         return !(left == right);
     }
 
-    /// <summary>Whether one value is below another, decided from the bottom word up without a branch.</summary>
+    /// <summary>Whether one value is below another. It compares from the bottom word up, without branches.</summary>
+    /// <param name="left">The first value.</param>
+    /// <param name="right">The second value.</param>
+    /// <returns>True if <paramref name="left"/> is less than <paramref name="right"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator <(Decimal128LongInteger left, Decimal128LongInteger right)
     {
@@ -224,47 +268,71 @@ internal readonly struct Decimal128LongInteger : IEquatable<Decimal128LongIntege
         return (left.Word3 < right.Word3) | ((left.Word3 == right.Word3) & less2);
     }
 
+    /// <summary>Whether one value is above another.</summary>
+    /// <param name="left">The first value.</param>
+    /// <param name="right">The second value.</param>
+    /// <returns>True if <paramref name="left"/> is greater than <paramref name="right"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator >(Decimal128LongInteger left, Decimal128LongInteger right)
     {
         return right < left;
     }
 
+    /// <summary>Whether one value is at most another.</summary>
+    /// <param name="left">The first value.</param>
+    /// <param name="right">The second value.</param>
+    /// <returns>True if <paramref name="left"/> is less than or equal to <paramref name="right"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator <=(Decimal128LongInteger left, Decimal128LongInteger right)
     {
         return !(right < left);
     }
 
+    /// <summary>Whether one value is at least another.</summary>
+    /// <param name="left">The first value.</param>
+    /// <param name="right">The second value.</param>
+    /// <returns>True if <paramref name="left"/> is greater than or equal to <paramref name="right"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator >=(Decimal128LongInteger left, Decimal128LongInteger right)
     {
         return !(left < right);
     }
 
+    /// <summary>Compares this value with another, without branches.</summary>
+    /// <param name="other">The value to compare with.</param>
+    /// <returns>-1, 0, or 1 as this value is less than, equal to, or greater than <paramref name="other"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int CompareTo(Decimal128LongInteger other)
     {
         return Unsafe.BitCast<bool, byte>(other < this) - Unsafe.BitCast<bool, byte>(this < other);
     }
 
+    /// <summary>Whether this value equals another.</summary>
+    /// <param name="other">The value to compare with.</param>
+    /// <returns>True if all four words are equal.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Equals(Decimal128LongInteger other)
     {
         return this == other;
     }
 
+    /// <summary>Whether this value equals an object.</summary>
+    /// <param name="obj">The object to compare with.</param>
+    /// <returns>True if <paramref name="obj"/> is a <see cref="Decimal128LongInteger"/> with the same words.</returns>
     public override bool Equals(object? obj)
     {
         return obj is Decimal128LongInteger other && Equals(other);
     }
 
+    /// <summary>A hash code built from all four words.</summary>
+    /// <returns>The hash code.</returns>
     public override int GetHashCode()
     {
         return HashCode.Combine(Word3, Word2, Word1, Word0);
     }
 
-    /// <summary>The nearest double, which carries the top fifty-three bits.</summary>
+    /// <summary>The value converted to a double, which keeps the top 53 bits.</summary>
+    /// <returns>The value as a double.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public double ToDouble()
     {

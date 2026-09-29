@@ -4,8 +4,8 @@
 namespace Decimals;
 
 /// <summary>
-/// The eight rounding modes of the General Decimal Arithmetic Specification, as
-/// <see cref="Decimal64"/> takes them.
+/// The eight rounding modes of the General Decimal Arithmetic Specification, for
+/// <see cref="Decimal64"/>.
 /// </summary>
 public enum Decimal64Rounding
 {
@@ -21,7 +21,7 @@ public enum Decimal64Rounding
     /// <summary>To nearest, ties toward zero.</summary>
     HalfDown,
 
-    /// <summary>To nearest, ties to the even digit. The default, and what IEEE 754 asks for.</summary>
+    /// <summary>To nearest, ties to the even digit. This is the default, as in IEEE 754.</summary>
     HalfEven,
 
     /// <summary>To nearest, ties away from zero.</summary>
@@ -31,9 +31,9 @@ public enum Decimal64Rounding
     Up,
 
     /// <summary>
-    /// Away from zero when the digit left of the discarded part is 0 or 5, toward zero
-    /// otherwise. The specification calls this <c>05up</c>; it exists so a result can be
-    /// rounded again later without a double-rounding error.
+    /// Away from zero if the last kept digit is 0 or 5, otherwise toward zero. The
+    /// specification calls it <c>05up</c>. A result rounded this way can be rounded again
+    /// later without double-rounding errors.
     /// </summary>
     ZeroFiveUp
 }

@@ -6,8 +6,8 @@ using BenchmarkDotNet.Attributes;
 namespace Decimals.Benchmarks;
 
 /// <summary>
-/// <see cref="Decimal64"/> on the wide operand set decbench uses, so the numbers read
-/// against the C reference.
+/// Times <see cref="Decimal64"/> on decbench's wide operand set, so the results can be
+/// compared with the C library.
 /// </summary>
 public class Decimal64Benchmarks
 {

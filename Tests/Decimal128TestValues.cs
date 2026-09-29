@@ -6,10 +6,10 @@ using System.Globalization;
 namespace Decimals.Tests;
 
 /// <summary>
-/// Random decimal128 operands as text, for tests that run over many values rather than a
-/// few chosen ones. The distribution leans on the places arithmetic goes wrong: full-width
-/// coefficients, runs of nines and zeros, coefficients on either side of a machine word,
-/// exponents at both ends of the range, and the special values.
+/// Random decimal128 operands as text, for tests that need many values. The values favor
+/// the cases where arithmetic tends to fail: full-width coefficients, runs of nines and
+/// zeros, coefficients near the 64-bit boundary, exponents at both ends of the range, and
+/// special values.
 /// </summary>
 public sealed class Decimal128TestValues
 {
@@ -142,8 +142,8 @@ public sealed class Decimal128TestValues
 
         if (choice == 3)
         {
-            // Either side of a machine word, which is where the multiply and the
-            // fused multiply-add change paths.
+            // Lengths near the 64-bit boundary, where multiply and fused multiply-add
+            // switch code paths.
             length = _random.Next(19, 22);
         }
 
@@ -151,7 +151,7 @@ public sealed class Decimal128TestValues
 
         if (choice == 4 && length > 3)
         {
-            // Trailing zeros, which the cohort rules are about.
+            // Trailing zeros, to test the rules for result exponents.
             var zeros = _random.Next(1, length - 1);
             for (var index = length - zeros; index < length; index++)
             {

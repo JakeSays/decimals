@@ -9,7 +9,7 @@ using Xunit;
 namespace Decimals.Tests;
 
 /// <summary>
-/// The divider's reciprocals and its quotients and remainders, against BigInteger.
+/// Checks the divider's reciprocals, quotients, and remainders against BigInteger.
 /// </summary>
 public sealed class Decimal128DividerTests
 {
@@ -31,8 +31,8 @@ public sealed class Decimal128DividerTests
             AssertReciprocal(NextWord(random) | (1UL << 63));
         }
 
-        // Divisors with long runs of ones and zeros, where a double's rounding lands the
-        // seed on a boundary.
+        // Divisors with long runs of ones and zeros. For these, rounding in the double
+        // puts the seed exactly on a boundary.
         for (var ones = 1; ones < 64; ones++)
         {
             var divisor = ulong.MaxValue << (64 - ones);
@@ -79,8 +79,8 @@ public sealed class Decimal128DividerTests
             var dividendDigits = dividend.ToString(CultureInfo.InvariantCulture).Length;
             var divisorDigits = divisor.ToString(CultureInfo.InvariantCulture).Length;
 
-            // The quotient has to stay below 10^35, which the scale the arithmetic uses
-            // guarantees, as does anything less, down to none.
+            // The quotient must stay below 10^35. The scale used by the arithmetic
+            // guarantees this, and so does any smaller scale, including zero.
             var zeros = attempt % 5 == 0
                 ? 0
                 : Math.Max(0, Decimal128Encoding.Precision + divisorDigits - dividendDigits - random.Next(0, 3));

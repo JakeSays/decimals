@@ -8,37 +8,36 @@ using System.Runtime.InteropServices;
 namespace Decimals.Internal;
 
 /// <summary>
-/// Powers of ten at one, two, and four words, the constants that stand in for dividing by
-/// them, and the digit count at each width. These sit under every operation, so each is a
-/// handful of instructions and no table is read with a bounds check.
+/// Powers of ten in one, two, and four words, the constants used to divide by them, and
+/// the digit count at each width. Every operation uses these, so each takes only a few
+/// instructions and no lookup has a bounds check.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Every table here is a span over the assembly's data section: nothing is allocated and no
-/// class constructor runs before a lookup.
+/// Every table here is a span over the assembly's data section. Nothing is allocated, and
+/// no static constructor runs before a lookup.
 /// </para>
 /// <para>
-/// A one-word value divides by a power of ten the way the sixty-four bit format does it:
-/// a shift by the power takes out the twos, and one multiply by the reciprocal of the
-/// fives that remain is exact for every numerator. A wider value is divided a word at a time from
-/// the top instead, by the two-by-one method of Moller and Granlund: the divisor is
-/// normalized to have its top bit set, its reciprocal is a word, and each step turns the
-/// remainder so far and the next word into a quotient word and a new remainder with two
-/// multiplies and at most two corrections. A power past one word divides four words by
-/// the three-by-two method of the same paper, which takes a word of quotient from three
-/// words of dividend the same way. The constants for all of these were found by a
-/// generator and are re-derived by the tests.
+/// A one-word value is divided by a power of ten as in Decimal64: a right shift by the
+/// power removes the factors of 2, and one multiply by the reciprocal of the remaining 5^p
+/// is exact for every numerator. A wider value is divided one word at a time from the top,
+/// with the 2-by-1 method of Möller and Granlund. The divisor is shifted so its top bit is
+/// set, and its reciprocal is one word. Each step turns the remainder and the next word
+/// into a quotient word and a new remainder, with two multiplies and at most two
+/// corrections. For powers above 10^19, four words are divided with the 3-by-2 method from
+/// the same paper, which gets one quotient word from three dividend words the same way.
+/// All the constants were generated, and the tests recompute them.
 /// </para>
 /// </remarks>
 internal static class Decimal128Tables
 {
-    /// <summary>Largest power of ten that fits one word.</summary>
+    /// <summary>The largest power of ten that fits in one word.</summary>
     public const int MaxPower = 19;
 
-    /// <summary>Largest power of ten that fits two words.</summary>
+    /// <summary>The largest power of ten that fits in two words.</summary>
     public const int MaxWidePower = 38;
 
-    /// <summary>Largest power of ten that fits four words.</summary>
+    /// <summary>The largest power of ten that fits in four words.</summary>
     public const int MaxLongPower = 77;
 
     private static ReadOnlySpan<ulong> Powers =>
@@ -66,8 +65,8 @@ internal static class Decimal128Tables
     ];
 
     /// <summary>
-    /// <c>ceil(2^(64 + shift) / 5^p)</c> for each power. Power zero divides by one, which the
-    /// callers never ask for.
+    /// <c>ceil(2^(64 + shift) / 5^p)</c> for each power. Power zero would divide by one,
+    /// which no caller does.
     /// </summary>
     private static ReadOnlySpan<ulong> Multipliers =>
     [
@@ -93,13 +92,13 @@ internal static class Decimal128Tables
         0xEC1E4A7DB69561A6
     ];
 
-    /// <summary><c>floor(log2 5^p)</c>: what the high half of the product is shifted by.</summary>
+    /// <summary><c>floor(log2 5^p)</c>: the right shift applied to the high half of the product.</summary>
     private static ReadOnlySpan<byte> Shifts =>
     [
         0, 2, 4, 6, 9, 11, 13, 16, 18, 20, 23, 25, 27, 30, 32, 34, 37, 39, 41, 44
     ];
 
-    /// <summary>Ten to each power from zero to thirty-eight, as a high word and a low word.</summary>
+    /// <summary>10 to each power from 0 to 38, as a high word and a low word.</summary>
     private static ReadOnlySpan<ulong> WidePowers =>
     [
         0x0000000000000000, 0x0000000000000001,
@@ -143,7 +142,7 @@ internal static class Decimal128Tables
         0x4B3B4CA85A86C47A, 0x098A224000000000
     ];
 
-    /// <summary>Ten to each power from zero to seventy-seven, as four words from the top down.</summary>
+    /// <summary>10 to each power from 0 to 77, as four words, highest first.</summary>
     private static ReadOnlySpan<ulong> LongPowers =>
     [
         0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000001,
@@ -227,15 +226,15 @@ internal static class Decimal128Tables
     ];
 
     /// <summary>
-    /// How far ten to each power is shifted left to put its top bit at the top of the word.
-    /// Power zero is never divided by.
+    /// The left shift that moves the top bit of 10^p to the top of the word, for each
+    /// power. No caller divides by power zero.
     /// </summary>
     private static ReadOnlySpan<byte> DivisorShifts =>
     [
         0, 60, 57, 54, 50, 47, 44, 40, 37, 34, 30, 27, 24, 20, 17, 14, 10, 7, 4, 0
     ];
 
-    /// <summary>Ten to each power shifted by <see cref="DivisorShifts"/>.</summary>
+    /// <summary>10 to each power, shifted left by <see cref="DivisorShifts"/>.</summary>
     private static ReadOnlySpan<ulong> NormalizedDivisors =>
     [
         0,
@@ -261,8 +260,8 @@ internal static class Decimal128Tables
     ];
 
     /// <summary>
-    /// <c>floor((2^128 - 1) / d') - 2^64</c> for each normalized divisor d', which is the
-    /// word the two-by-one step multiplies by.
+    /// <c>floor((2^128 - 1) / d') - 2^64</c> for each normalized divisor d'. The 2-by-1
+    /// division step multiplies by this word.
     /// </summary>
     private static ReadOnlySpan<ulong> Inverses =>
     [
@@ -289,8 +288,8 @@ internal static class Decimal128Tables
     ];
 
     /// <summary>
-    /// How far ten to each power from twenty to thirty-eight is shifted left to put its
-    /// top bit at the top of its high word.
+    /// The left shift that moves the top bit of 10^p to the top of its high word, for each
+    /// power from 20 to 38.
     /// </summary>
     private static ReadOnlySpan<byte> WideDivisorShifts =>
     [
@@ -298,8 +297,8 @@ internal static class Decimal128Tables
     ];
 
     /// <summary>
-    /// Ten to each power from twenty to thirty-eight shifted by <see cref="WideDivisorShifts"/>,
-    /// as a high word and a low word.
+    /// 10 to each power from 20 to 38, shifted left by <see cref="WideDivisorShifts"/>, as a
+    /// high word and a low word.
     /// </summary>
     private static ReadOnlySpan<ulong> WideNormalizedDivisors =>
     [
@@ -325,8 +324,8 @@ internal static class Decimal128Tables
     ];
 
     /// <summary>
-    /// <c>floor((2^192 - 1) / d') - 2^64</c> for each normalized wide divisor d', which is
-    /// the word the three-by-two step multiplies by.
+    /// <c>floor((2^192 - 1) / d') - 2^64</c> for each normalized two-word divisor d'. The
+    /// 3-by-2 division step multiplies by this word.
     /// </summary>
     private static ReadOnlySpan<ulong> WideInverses =>
     [
@@ -352,9 +351,9 @@ internal static class Decimal128Tables
     ];
 
     /// <summary>
-    /// The seed of a word's reciprocal for each value of the divisor's top nine bits,
-    /// from 256 up: <c>floor((2^19 - 3 * 2^8) / d9)</c>, eleven bits that three
-    /// refinements bring to sixty-four.
+    /// The reciprocal seed for each value of the divisor's top 9 bits, from 256 up:
+    /// <c>floor((2^19 - 3 * 2^8) / d9)</c>. The seed has 11 correct bits, and three
+    /// refinements bring it to 64.
     /// </summary>
     private static ReadOnlySpan<ushort> ReciprocalSeeds =>
     [
@@ -376,14 +375,18 @@ internal static class Decimal128Tables
         1055, 1053, 1051, 1049, 1047, 1044, 1042, 1040, 1038, 1036, 1034, 1032, 1030, 1028, 1026, 1024
     ];
 
-    /// <summary>Ten to <paramref name="power"/>, which must be at most <see cref="MaxPower"/>.</summary>
+    /// <summary>10 to the power <paramref name="power"/>, which must be at most <see cref="MaxPower"/>.</summary>
+    /// <param name="power">The power of ten, from 0 to <see cref="MaxPower"/>. It is not range-checked.</param>
+    /// <returns>10^<paramref name="power"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ulong PowerOfTen(int power)
     {
         return Unsafe.Add(ref MemoryMarshal.GetReference(Powers), power);
     }
 
-    /// <summary>Ten to <paramref name="power"/> in two words, for a power up to <see cref="MaxWidePower"/>.</summary>
+    /// <summary>10 to the power <paramref name="power"/> in two words. The power must be at most <see cref="MaxWidePower"/>.</summary>
+    /// <param name="power">The power of ten, from 0 to <see cref="MaxWidePower"/>. It is not range-checked.</param>
+    /// <returns>10^<paramref name="power"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Decimal128Integer WidePowerOfTen(int power)
     {
@@ -391,7 +394,9 @@ internal static class Decimal128Tables
         return new Decimal128Integer(entry, Unsafe.Add(ref entry, 1));
     }
 
-    /// <summary>Ten to <paramref name="power"/> in four words, for a power up to <see cref="MaxLongPower"/>.</summary>
+    /// <summary>10 to the power <paramref name="power"/> in four words. The power must be at most <see cref="MaxLongPower"/>.</summary>
+    /// <param name="power">The power of ten, from 0 to <see cref="MaxLongPower"/>. It is not range-checked.</param>
+    /// <returns>10^<paramref name="power"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Decimal128LongInteger LongPowerOfTen(int power)
     {
@@ -400,70 +405,92 @@ internal static class Decimal128Tables
             Unsafe.Add(ref entry, 3));
     }
 
-    /// <summary>The multiplier for a power, so a test can re-derive it.</summary>
+    /// <summary>The multiplier for a power. Tests use it to check the table.</summary>
+    /// <param name="power">The power of ten, from 0 to <see cref="MaxPower"/>.</param>
+    /// <returns><c>ceil(2^(64 + shift) / 5^power)</c>, or 0 for power zero.</returns>
     public static ulong Multiplier(int power)
     {
         return Multipliers[power];
     }
 
-    /// <summary>The post-shift for a power, so a test can re-derive it.</summary>
+    /// <summary>The post-shift for a power. Tests use it to check the table.</summary>
+    /// <param name="power">The power of ten, from 0 to <see cref="MaxPower"/>.</param>
+    /// <returns><c>floor(log2 5^power)</c>.</returns>
     public static int Shift(int power)
     {
         return Shifts[power];
     }
 
-    /// <summary>The normalization shift for a power, so a test can re-derive it.</summary>
+    /// <summary>The normalization shift for a power. Tests use it to check the table.</summary>
+    /// <param name="power">The power of ten, from 0 to <see cref="MaxPower"/>.</param>
+    /// <returns>The left shift that moves the top bit of 10^<paramref name="power"/> to bit 63.</returns>
     public static int DivisorShift(int power)
     {
         return DivisorShifts[power];
     }
 
-    /// <summary>The normalized divisor for a power, so a test can re-derive it.</summary>
+    /// <summary>The normalized divisor for a power. Tests use it to check the table.</summary>
+    /// <param name="power">The power of ten, from 0 to <see cref="MaxPower"/>.</param>
+    /// <returns>10^<paramref name="power"/> shifted left by <see cref="DivisorShift"/>.</returns>
     public static ulong NormalizedDivisor(int power)
     {
         return NormalizedDivisors[power];
     }
 
-    /// <summary>The reciprocal word for a power, so a test can re-derive it.</summary>
+    /// <summary>The reciprocal word for a power. Tests use it to check the table.</summary>
+    /// <param name="power">The power of ten, from 0 to <see cref="MaxPower"/>.</param>
+    /// <returns><c>floor((2^128 - 1) / d') - 2^64</c> for the normalized divisor d'.</returns>
     public static ulong Inverse(int power)
     {
         return Inverses[power];
     }
 
-    /// <summary>The normalization shift for a power from twenty up, so a test can re-derive it.</summary>
+    /// <summary>The normalization shift for a power from 20 up. Tests use it to check the table.</summary>
+    /// <param name="power">The power of ten, from 20 to <see cref="MaxWidePower"/>.</param>
+    /// <returns>The left shift that moves the top bit of 10^<paramref name="power"/> to the top of its high word.</returns>
     public static int WideDivisorShift(int power)
     {
         return WideDivisorShifts[power - MaxPower - 1];
     }
 
-    /// <summary>The normalized divisor for a power from twenty up, so a test can re-derive it.</summary>
+    /// <summary>The normalized divisor for a power from 20 up. Tests use it to check the table.</summary>
+    /// <param name="power">The power of ten, from 20 to <see cref="MaxWidePower"/>.</param>
+    /// <returns>10^<paramref name="power"/> shifted left by <see cref="WideDivisorShift"/>.</returns>
     public static Decimal128Integer WideNormalizedDivisor(int power)
     {
         var index = (power - MaxPower - 1) * 2;
         return new Decimal128Integer(WideNormalizedDivisors[index], WideNormalizedDivisors[index + 1]);
     }
 
-    /// <summary>The three-by-two reciprocal word for a power from twenty up, so a test can re-derive it.</summary>
+    /// <summary>The 3-by-2 reciprocal word for a power from 20 up. Tests use it to check the table.</summary>
+    /// <param name="power">The power of ten, from 20 to <see cref="MaxWidePower"/>.</param>
+    /// <returns><c>floor((2^192 - 1) / d') - 2^64</c> for the normalized two-word divisor d'.</returns>
     public static ulong WideInverse(int power)
     {
         return WideInverses[power - MaxPower - 1];
     }
 
-    /// <summary>The reciprocal seed for a normalized divisor's top nine bits, which are 256 or more.</summary>
+    /// <summary>The reciprocal seed for a normalized divisor's top 9 bits, which are at least 256.</summary>
+    /// <param name="topBits">The divisor's top 9 bits, from 256 to 511. It is not range-checked.</param>
+    /// <returns>An 11-bit estimate of the reciprocal.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ulong ReciprocalSeed(int topBits)
     {
         return Unsafe.Add(ref MemoryMarshal.GetReference(ReciprocalSeeds), topBits - 256);
     }
 
-    /// <summary>Half of ten to <paramref name="power"/>, the point a discarded part is judged against.</summary>
+    /// <summary>Half of 10 to the power <paramref name="power"/>, used to classify a discarded part.</summary>
+    /// <param name="power">The power of ten, from 0 to <see cref="MaxPower"/>. It is not range-checked.</param>
+    /// <returns>10^<paramref name="power"/> / 2, which is 0 for power zero.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ulong HalfPowerOfTen(int power)
     {
         return PowerOfTen(power) >> 1;
     }
 
-    /// <summary>Half of ten to <paramref name="power"/> in two words, for a power up to <see cref="MaxWidePower"/>.</summary>
+    /// <summary>Half of 10 to the power <paramref name="power"/>, in two words. The power must be at most <see cref="MaxWidePower"/>.</summary>
+    /// <param name="power">The power of ten, from 0 to <see cref="MaxWidePower"/>. It is not range-checked.</param>
+    /// <returns>10^<paramref name="power"/> / 2, which is 0 for power zero.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Decimal128Integer WideHalfPowerOfTen(int power)
     {
@@ -471,14 +498,18 @@ internal static class Decimal128Tables
     }
 
     /// <summary>
-    /// A two-word value times ten to <paramref name="power"/>, for a power up to
-    /// <see cref="MaxWidePower"/>. The caller knows the product still fits two words.
+    /// A two-word value times 10 to the power <paramref name="power"/>. The power must be at
+    /// most <see cref="MaxWidePower"/>, and the caller must know the product fits in two
+    /// words.
     /// </summary>
     /// <remarks>
-    /// Always the two-word multiply. Choosing a one-word multiply for a power that fits a
-    /// word was a branch decided by the data, and it mispredicted for more than the
-    /// multiply it saved.
+    /// This always uses the two-word multiply. Choosing a one-word multiply when the power
+    /// fits in a word needed a branch that depends on the data, and its mispredictions cost
+    /// more than the multiply saved.
     /// </remarks>
+    /// <param name="value">The value to scale.</param>
+    /// <param name="power">The power of ten, from 0 to <see cref="MaxWidePower"/>.</param>
+    /// <returns><paramref name="value"/> * 10^<paramref name="power"/>, truncated to two words.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Decimal128Integer Scale(Decimal128Integer value, int power)
     {
@@ -486,10 +517,14 @@ internal static class Decimal128Tables
     }
 
     /// <summary>
-    /// A two-word value times ten to <paramref name="power"/>, for a power up to
-    /// <see cref="MaxLongPower"/>, in four words. The caller knows the product fits them,
-    /// so it is one multiply of the two words by the four of the power, cut to four.
+    /// A two-word value times 10 to the power <paramref name="power"/>, in four words. The
+    /// power must be at most <see cref="MaxLongPower"/>, and the caller must know the product
+    /// fits in four words. It is one multiply of two words by the power's four words,
+    /// truncated to four words.
     /// </summary>
+    /// <param name="value">The value to scale.</param>
+    /// <param name="power">The power of ten, from 0 to <see cref="MaxLongPower"/>.</param>
+    /// <returns><paramref name="value"/> * 10^<paramref name="power"/>, truncated to four words.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Decimal128LongInteger ScaleLong(Decimal128Integer value, int power)
     {
@@ -497,9 +532,13 @@ internal static class Decimal128Tables
     }
 
     /// <summary>
-    /// Divides a word by ten to <paramref name="power"/>, which must be between 1 and
-    /// <see cref="MaxPower"/>, handing back the remainder as well.
+    /// Divides one word by 10 to the power <paramref name="power"/> and returns the
+    /// remainder too. The power must be between 1 and <see cref="MaxPower"/>.
     /// </summary>
+    /// <param name="value">The dividend.</param>
+    /// <param name="power">The power of ten to divide by, from 1 to <see cref="MaxPower"/>. It is not range-checked.</param>
+    /// <param name="remainder">Receives the remainder.</param>
+    /// <returns>The quotient.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ulong DivRemPowerOfTen(ulong value, int power, out ulong remainder)
     {
@@ -512,16 +551,20 @@ internal static class Decimal128Tables
     }
 
     /// <summary>
-    /// Divides two words by ten to <paramref name="power"/>, which must be between 1 and
-    /// <see cref="MaxPower"/>, handing back the remainder as well.
+    /// Divides two words by 10 to the power <paramref name="power"/> and returns the
+    /// remainder too. The power must be between 1 and <see cref="MaxPower"/>.
     /// </summary>
     /// <remarks>
-    /// The high word on its own is a one-word division, exact by reciprocal. What it
-    /// leaves, over the low word, is one step of the two-by-one division: the pair is
-    /// shifted left by the divisor's normalization, and what is left is below the
-    /// normalized divisor because the remainder it came from was below the power. The
-    /// remainder at the end is shifted back.
+    /// The high word is divided alone, exactly, with the reciprocal. Its remainder and the
+    /// low word are then divided with one step of the 2-by-1 division. The pair is shifted
+    /// left by the divisor's normalization shift, and the high part is below the normalized
+    /// divisor because the remainder was below the power. The final remainder is shifted
+    /// back.
     /// </remarks>
+    /// <param name="value">The dividend.</param>
+    /// <param name="power">The power of ten to divide by, from 1 to <see cref="MaxPower"/>. It is not range-checked.</param>
+    /// <param name="remainder">Receives the remainder, which is below 10^<paramref name="power"/>.</param>
+    /// <returns>The quotient.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Decimal128Integer DivRemPowerOfTen(Decimal128Integer value, int power, out ulong remainder)
     {
@@ -531,8 +574,8 @@ internal static class Decimal128Tables
         var divisor = Unsafe.Add(ref MemoryMarshal.GetReference(NormalizedDivisors), power);
         var inverse = Unsafe.Add(ref MemoryMarshal.GetReference(Inverses), power);
 
-        // A shift of sixty-four is undefined for a word, so the bits that cross the word
-        // boundary are taken with two shifts of at most sixty-three between them.
+        // A shift by 64 is undefined for a 64-bit word, so the bits that cross the word
+        // boundary are moved with two shifts, neither larger than 63.
         var top = (rest << shift) | ((value.Low >> 1) >> (63 - shift));
         var bottom = value.Low << shift;
 
@@ -542,11 +585,15 @@ internal static class Decimal128Tables
     }
 
     /// <summary>
-    /// Divides four words by ten to <paramref name="power"/>, which must be between 1 and
-    /// <see cref="MaxPower"/>, handing back the remainder as well. The top word is a
-    /// one-word division and the three below it are steps of the two-by-one division, as
-    /// for two words.
+    /// Divides four words by 10 to the power <paramref name="power"/> and returns the
+    /// remainder too. The power must be between 1 and <see cref="MaxPower"/>. As for two
+    /// words, the top word is a one-word division and the three words below it are steps of
+    /// the 2-by-1 division.
     /// </summary>
+    /// <param name="value">The dividend.</param>
+    /// <param name="power">The power of ten to divide by, from 1 to <see cref="MaxPower"/>. It is not range-checked.</param>
+    /// <param name="remainder">Receives the remainder, which is below 10^<paramref name="power"/>.</param>
+    /// <returns>The quotient.</returns>
     public static Decimal128LongInteger DivRemPowerOfTen(Decimal128LongInteger value, int power, out ulong remainder)
     {
         var word3 = DivRemPowerOfTen(value.Word3, power, out var rest);
@@ -568,10 +615,14 @@ internal static class Decimal128Tables
     }
 
     /// <summary>
-    /// Divides two words by ten to <paramref name="power"/>, which may run to
-    /// <see cref="MaxWidePower"/>, handing back the remainder in two words. Past one word's
-    /// power it is two divisions, and the remainder is put back together from theirs.
+    /// Divides two words by 10 to the power <paramref name="power"/> and returns the
+    /// two-word remainder too. The power can be up to <see cref="MaxWidePower"/>. For powers
+    /// above 19, it does two divisions and combines their remainders.
     /// </summary>
+    /// <param name="value">The dividend.</param>
+    /// <param name="power">The power of ten to divide by, from 1 to <see cref="MaxWidePower"/>.</param>
+    /// <param name="remainder">Receives the remainder, which is below 10^<paramref name="power"/>.</param>
+    /// <returns>The quotient.</returns>
     public static Decimal128Integer DivRemWidePowerOfTen(Decimal128Integer value, int power,
         out Decimal128Integer remainder)
     {
@@ -589,13 +640,18 @@ internal static class Decimal128Tables
     }
 
     /// <summary>
-    /// Divides four words by ten to <paramref name="power"/>, which must be between twenty
-    /// and <see cref="MaxWidePower"/>, when the quotient fits two words: two steps of the
-    /// three-by-two division by the normalized power. When the quotient does not fit,
-    /// which no value the arithmetic forms brings about, nothing is divided and the result
-    /// is false.
+    /// Divides four words by 10 to the power <paramref name="power"/>, when the quotient
+    /// fits in two words. The power must be between 20 and <see cref="MaxWidePower"/>. The
+    /// division is two steps of the 3-by-2 division by the normalized power. If the quotient
+    /// does not fit, nothing is divided and the method returns false. No value produced by
+    /// the arithmetic causes that.
     /// </summary>
-    public static bool TryDivRemWidePowerOfTen(Decimal128LongInteger value, int power,
+    /// <param name="value">The dividend.</param>
+    /// <param name="power">The power of ten to divide by, from 20 to <see cref="MaxWidePower"/>. It is not range-checked.</param>
+    /// <param name="quotient">Receives the quotient, or zero if it does not fit in two words.</param>
+    /// <param name="remainder">Receives the remainder, or zero if the quotient does not fit in two words.</param>
+    /// <returns>True if the quotient fits in two words and the division was done.</returns>
+    public static bool DivRemWidePowerOfTenIfFits(Decimal128LongInteger value, int power,
         out Decimal128Integer quotient, out Decimal128Integer remainder)
     {
         var index = power - MaxPower - 1;
@@ -610,8 +666,8 @@ internal static class Decimal128Tables
         var word1 = (value.Word1 << shift) | ((value.Word0 >> 1) >> (63 - shift));
         var word0 = value.Word0 << shift;
 
-        // The quotient fits two words exactly when the shifted value's top two words are
-        // below the shifted divisor, with nothing shifted out above them.
+        // The quotient fits in two words if and only if the shifted value's top two words
+        // are below the shifted divisor and no bits were shifted out above them.
         var lost = (value.Word3 >> 1) >> (63 - shift);
         if (lost != 0 || new Decimal128Integer(word3, word2) >= new Decimal128Integer(divisorHigh, divisorLow))
         {
@@ -628,15 +684,20 @@ internal static class Decimal128Tables
     }
 
     /// <summary>
-    /// One step of the two-by-one division: the remainder so far above the next word,
-    /// divided by the normalized divisor. The estimate is the reciprocal times the high
-    /// word plus the dividend itself, incremented, and it is at most one too high or too
-    /// low, which the two comparisons put right.
+    /// One step of the 2-by-1 division: divides the remainder and the next word by the
+    /// normalized divisor. The estimate is the reciprocal times the high word, plus the
+    /// dividend, plus 1. It is at most 1 too high or 1 too low, and two comparisons correct
+    /// it.
     /// </summary>
     /// <remarks>
-    /// The estimate is one too high about half the time, so that correction is a mask
-    /// rather than a branch. One too low is rare, and its branch is predicted.
+    /// The estimate is 1 too high about half the time, so that correction uses a mask
+    /// instead of a branch. 1 too low is rare, so its branch predicts well.
     /// </remarks>
+    /// <param name="remainder">The high word of the dividend, which must be below <paramref name="divisor"/>. Receives the new remainder.</param>
+    /// <param name="word">The low word of the dividend.</param>
+    /// <param name="divisor">The normalized divisor, with its top bit set.</param>
+    /// <param name="inverse">The divisor's reciprocal word, as <see cref="Inverse"/> gives.</param>
+    /// <returns>The quotient word.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ulong DivideWord(ref ulong remainder, ulong word, ulong divisor, ulong inverse)
     {
@@ -663,17 +724,23 @@ internal static class Decimal128Tables
     }
 
     /// <summary>
-    /// One step of the three-by-two division: the two-word remainder so far above the
-    /// next word, divided by the normalized two-word divisor, leaving the new remainder in
-    /// place. The estimate is the reciprocal times the top word plus the top two words
-    /// themselves, incremented, and it is at most one too high or one too low. The divisor
-    /// is taken off once in advance, for the increment, and the first correction puts it
-    /// back.
+    /// One step of the 3-by-2 division: divides the two-word remainder and the next word by
+    /// the normalized two-word divisor, and leaves the new remainder in place. The estimate
+    /// is the reciprocal times the top word, plus the top two words, plus 1. It is at most 1
+    /// too high or 1 too low. The divisor is subtracted once in advance for the +1, and the
+    /// first correction adds it back.
     /// </summary>
     /// <remarks>
-    /// As for one word, the estimate is one too high about half the time, so that
-    /// correction is a mask rather than a branch, and one too low is rare.
+    /// As in the one-word step, the estimate is 1 too high about half the time, so that
+    /// correction uses a mask instead of a branch. 1 too low is rare.
     /// </remarks>
+    /// <param name="remainderHigh">The top word of the dividend. Receives the high word of the new remainder.</param>
+    /// <param name="remainderLow">The middle word of the dividend. Receives the low word of the new remainder.</param>
+    /// <param name="word">The bottom word of the dividend.</param>
+    /// <param name="divisorHigh">The high word of the normalized divisor, with its top bit set.</param>
+    /// <param name="divisorLow">The low word of the normalized divisor.</param>
+    /// <param name="inverse">The divisor's reciprocal word, as <see cref="WideInverse"/> gives.</param>
+    /// <returns>The quotient word.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ulong DivideThreeByTwo(ref ulong remainderHigh, ref ulong remainderLow, ulong word,
         ulong divisorHigh, ulong divisorLow, ulong inverse)
@@ -717,13 +784,15 @@ internal static class Decimal128Tables
     }
 
     /// <summary>
-    /// How many digits a word is written with. Zero counts as one.
+    /// The number of decimal digits in a word. Zero has one digit.
     /// </summary>
     /// <remarks>
-    /// The bit length gives the count to within one, since a bit is worth log10(2) of a
-    /// digit, and one comparison against a power of ten settles it. Or-ing in a one is what
-    /// makes zero read as one digit without a branch of its own.
+    /// The bit length gives the digit count to within one, because each bit is worth
+    /// log10(2) of a digit. One comparison with a power of ten gives the exact count. OR-ing
+    /// in a 1 makes zero count as one digit without a separate branch.
     /// </remarks>
+    /// <param name="value">The value to measure.</param>
+    /// <returns>The number of decimal digits, from 1 to 20.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int CountDigits(ulong value)
     {
@@ -731,18 +800,21 @@ internal static class Decimal128Tables
         var bitLength = 64 - BitOperations.LeadingZeroCount(nonZero);
         var digits = ((bitLength * 1233) >> 12) + 1;
 
-        // The estimate is one too many for values below the power it names, which is a
-        // coin flip on mixed values and so is settled by a compare rather than a branch.
+        // The estimate is one too high for values below the power it names. That is random
+        // for mixed values, so it is corrected with a comparison instead of a branch.
         return digits - Unsafe.BitCast<bool, byte>(nonZero < PowerOfTen(digits - 1));
     }
 
-    /// <summary>How many digits a two-word value is written with. Zero counts as one.</summary>
+    /// <summary>The number of decimal digits in a two-word value. Zero has one digit.</summary>
     /// <remarks>
-    /// The bit length is the high word's when it has one and the low word's otherwise,
-    /// chosen with a mask: a coefficient is as likely to fit one word as not, so a branch
-    /// on it is a coin flip. The one or-ed into the low word makes zero read as one digit;
-    /// it can change no other compare, since every power of ten above one is even.
+    /// The bit length comes from the high word if it is non-zero, and from the low word
+    /// otherwise. The choice uses a mask, because a coefficient is as likely to fit in one
+    /// word as not, so a branch would mispredict half the time. The 1 OR-ed into the low
+    /// word makes zero count as one digit. It cannot change any other comparison, because
+    /// every power of ten above 1 is even.
     /// </remarks>
+    /// <param name="value">The value to measure. It must be below 10^38.</param>
+    /// <returns>The number of decimal digits, from 1 to 38.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int CountDigits(Decimal128Integer value)
     {
@@ -754,7 +826,9 @@ internal static class Decimal128Tables
         return digits - Unsafe.BitCast<bool, byte>(nonZero < WidePowerOfTen(digits - 1));
     }
 
-    /// <summary>How many digits a four-word value is written with.</summary>
+    /// <summary>The number of decimal digits in a four-word value. Zero has one digit.</summary>
+    /// <param name="value">The value to measure. It must be below 10^77.</param>
+    /// <returns>The number of decimal digits, from 1 to 77.</returns>
     public static int CountDigits(Decimal128LongInteger value)
     {
         if (value.IsInteger)

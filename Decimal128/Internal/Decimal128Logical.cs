@@ -4,15 +4,15 @@
 namespace Decimals.Internal;
 
 /// <summary>
-/// The digit-wise logical operations, which read a coefficient as a string of ones and
-/// zeros rather than as a number.
+/// The digit-wise logical operations. They treat a coefficient as a string of 0 and 1
+/// digits, not as a number.
 /// </summary>
 /// <remarks>
-/// An operand has to be a logical number: finite, unsigned, with a zero exponent and no
-/// digit other than 0 or 1. Anything else is an invalid operation. The digits map onto a
-/// bit apiece, the operation is one machine instruction, and the bits map back. The
-/// coefficient is read and written in two halves of seventeen digits, each of which fits
-/// a word.
+/// Each operand must be a logical number: finite, positive, exponent zero, and only the
+/// digits 0 and 1. Any other operand is an invalid operation. Each digit maps to one bit,
+/// the operation is one machine instruction, and the bits map back to digits. The
+/// coefficient is read and written in two halves of 17 digits, each of which fits in a
+/// 64-bit word.
 /// </remarks>
 internal static class Decimal128Logical
 {
@@ -20,9 +20,14 @@ internal static class Decimal128Logical
 
     private const int HalfDigits = 17;
 
+    /// <summary>The digit-wise AND of two logical operands.</summary>
+    /// <param name="left">The first operand: positive, exponent zero, and only the digits 0 and 1.</param>
+    /// <param name="right">The second operand, with the same requirements.</param>
+    /// <param name="status">Receives InvalidOperation if an operand is not a logical operand.</param>
+    /// <returns>The encoded result, or a quiet NaN if an operand is invalid.</returns>
     public static Decimal128Integer And(Decimal128Integer left, Decimal128Integer right, ref Decimal128Status status)
     {
-        if (!TryToBits(left, out var first) || !TryToBits(right, out var second))
+        if (LogicalOperandBits(left) is not { } first || LogicalOperandBits(right) is not { } second)
         {
             return Decimal128Arithmetic.Invalid(ref status);
         }
@@ -30,9 +35,14 @@ internal static class Decimal128Logical
         return FromBits(first & second);
     }
 
+    /// <summary>The digit-wise OR of two logical operands.</summary>
+    /// <param name="left">The first operand: positive, exponent zero, and only the digits 0 and 1.</param>
+    /// <param name="right">The second operand, with the same requirements.</param>
+    /// <param name="status">Receives InvalidOperation if an operand is not a logical operand.</param>
+    /// <returns>The encoded result, or a quiet NaN if an operand is invalid.</returns>
     public static Decimal128Integer Or(Decimal128Integer left, Decimal128Integer right, ref Decimal128Status status)
     {
-        if (!TryToBits(left, out var first) || !TryToBits(right, out var second))
+        if (LogicalOperandBits(left) is not { } first || LogicalOperandBits(right) is not { } second)
         {
             return Decimal128Arithmetic.Invalid(ref status);
         }
@@ -40,9 +50,14 @@ internal static class Decimal128Logical
         return FromBits(first | second);
     }
 
+    /// <summary>The digit-wise exclusive OR of two logical operands.</summary>
+    /// <param name="left">The first operand: positive, exponent zero, and only the digits 0 and 1.</param>
+    /// <param name="right">The second operand, with the same requirements.</param>
+    /// <param name="status">Receives InvalidOperation if an operand is not a logical operand.</param>
+    /// <returns>The encoded result, or a quiet NaN if an operand is invalid.</returns>
     public static Decimal128Integer Xor(Decimal128Integer left, Decimal128Integer right, ref Decimal128Status status)
     {
-        if (!TryToBits(left, out var first) || !TryToBits(right, out var second))
+        if (LogicalOperandBits(left) is not { } first || LogicalOperandBits(right) is not { } second)
         {
             return Decimal128Arithmetic.Invalid(ref status);
         }
@@ -51,12 +66,15 @@ internal static class Decimal128Logical
     }
 
     /// <summary>
-    /// Inverts every digit of the format's full width, so a short coefficient's leading
-    /// zeros become ones.
+    /// Inverts every digit across the format's full precision, so leading zeros of a short
+    /// coefficient become ones.
     /// </summary>
+    /// <param name="value">The operand: positive, exponent zero, and only the digits 0 and 1.</param>
+    /// <param name="status">Receives InvalidOperation if the operand is not a logical operand.</param>
+    /// <returns>The encoded result, or a quiet NaN if the operand is invalid.</returns>
     public static Decimal128Integer Invert(Decimal128Integer value, ref Decimal128Status status)
     {
-        if (!TryToBits(value, out var bits))
+        if (LogicalOperandBits(value) is not { } bits)
         {
             return Decimal128Arithmetic.Invalid(ref status);
         }
@@ -65,29 +83,37 @@ internal static class Decimal128Logical
     }
 
     /// <summary>
-    /// Reads a logical number as a bit per digit, least significant digit first, refusing
-    /// anything that is not one.
+    /// A logical number as one bit per digit, least significant digit first, or null if
+    /// the value is not a logical number.
     /// </summary>
-    private static bool TryToBits(Decimal128Integer value, out ulong bits)
+    private static ulong? LogicalOperandBits(Decimal128Integer value)
     {
-        bits = 0;
-
         if (Decimal128Encoding.IsSpecial(value) || Decimal128Encoding.IsNegative(value))
         {
-            return false;
+            return null;
         }
 
         var coefficient = Decimal128Encoding.Unpack(value, out var exponent);
         if (exponent != 0)
         {
-            return false;
+            return null;
         }
 
         var upper = Decimal128Tables.DivRemPowerOfTen(coefficient, HalfDigits, out var lower);
-        return TryReadHalf(lower, 0, ref bits) && TryReadHalf(upper.Low, HalfDigits, ref bits);
+        var bits = 0UL;
+        if (!ReadHalf(lower, 0, ref bits) || !ReadHalf(upper.Low, HalfDigits, ref bits))
+        {
+            return null;
+        }
+
+        return bits;
     }
 
-    private static bool TryReadHalf(ulong half, int offset, ref ulong bits)
+    /// <summary>
+    /// Adds the bits of one half of the coefficient to <paramref name="bits"/>, starting at
+    /// <paramref name="offset"/>. Returns false if the half has a digit other than 0 or 1.
+    /// </summary>
+    private static bool ReadHalf(ulong half, int offset, ref ulong bits)
     {
         for (var position = 0; position < HalfDigits && half != 0; position++)
         {

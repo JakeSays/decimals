@@ -2,17 +2,17 @@
 // SPDX-License-Identifier: MIT
 
 using System.Globalization;
-
+using System.Text;
 
 namespace Decimals.Tests;
 
 /// <summary>
-/// Parsing and formatting of <see cref="Decimal64"/>, with cases taken from the ddBase
-/// testcase group, and the culture and format-string surface on top of them.
+/// Tests parsing and formatting of <see cref="Decimal64"/>, using cases from the ddBase
+/// test file, plus culture and format-string handling.
 /// </summary>
 public class Decimal64TextTests
 {
-    // toSci round trips: the string in is the string out.
+    // toSci round trips: the output string equals the input string.
     [Theory]
     [InlineData("0")]
     [InlineData("1")]
@@ -65,7 +65,7 @@ public class Decimal64TextTests
         Assert.Equal(expected, Decimal64.Parse(text).ToString());
     }
 
-    // Rounded to 16 digits, with the dot in every position.
+    // Rounded to 16 digits, with the decimal point in every position.
     [Theory]
     [InlineData(".1234567890123456123", "0.1234567890123456")]
     [InlineData("1.234567890123456123", "1.234567890123456")]
@@ -83,9 +83,9 @@ public class Decimal64TextTests
     }
 
     /// <summary>
-    /// Digits past the nineteen a word holds become a sticky residue. That is only sound
-    /// while the rounding discards digits above it, and here it always does: the digit that
-    /// decides the rounding is the seventeenth, and the sticky sits below the nineteenth.
+    /// Digits after the 19th do not fit in a 64-bit word, so the parser folds them into a
+    /// sticky flag. That is safe only if rounding happens above the 19th digit. It always
+    /// does: rounding is decided at the 17th digit.
     /// </summary>
     [Theory]
     [InlineData("1234567890123456499999999999999999999", "1.234567890123456E+36")]
@@ -252,8 +252,8 @@ public class Decimal64TextTests
             var value = Decimal64.Parse(values.Next());
             var expected = value.ToString();
 
-            // A null provider means the current culture, as it does for every .NET number,
-            // so the invariant one is named to get the specification's spellings.
+            // A null provider means the current culture, as for every .NET number type. The
+            // invariant culture is passed to get the specification's text.
             var invariant = CultureInfo.InvariantCulture;
 
             Assert.True(value.TryFormat(buffer, out var written, default, invariant));
@@ -263,12 +263,12 @@ public class Decimal64TextTests
             Assert.Equal(value.ToEngineeringString(), new string(buffer[..written]));
 
             Assert.True(value.TryFormat(utf8, out var bytes, default, invariant));
-            Assert.Equal(expected, System.Text.Encoding.UTF8.GetString(utf8[..bytes]));
+            Assert.Equal(expected, Encoding.UTF8.GetString(utf8[..bytes]));
 
             Assert.False(value.TryFormat(buffer[..(expected.Length - 1)], out written, default, invariant));
             Assert.Equal(0, written);
 
-            Assert.Equal(value.ToString(), Decimal64.Parse(System.Text.Encoding.UTF8.GetBytes(expected)).ToString());
+            Assert.Equal(value.ToString(), Decimal64.Parse(Encoding.UTF8.GetBytes(expected)).ToString());
         }
     }
 

@@ -4,12 +4,11 @@
 namespace Decimals.Conformance;
 
 /// <summary>
-/// The rounding mode a testcase runs under and the conditions it has raised so far.
+/// The rounding mode for a test case and the conditions it has raised so far.
 /// </summary>
 /// <remarks>
-/// The runner owns this rather than borrowing any one format's context, so that it drives
-/// every format through the same seam. A target builds its type's own context from this one
-/// and copies the conditions back.
+/// The runner has its own context type so that it can drive every format the same way. A
+/// target creates its type's context from this one and copies the conditions back.
 /// </remarks>
 public struct DecTestContext
 {

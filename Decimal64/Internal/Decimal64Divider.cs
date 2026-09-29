@@ -7,24 +7,24 @@ using System.Runtime.CompilerServices;
 namespace Decimals.Internal;
 
 /// <summary>
-/// Long division of a decimal-scaled dividend by a sixteen-digit divisor, in chunks of up
-/// to nine digits, with each chunk's quotient estimated in floating point and corrected
-/// exactly in integers.
+/// Long division of a scaled dividend by a divisor of up to 16 digits. It works in chunks
+/// of up to 9 digits. Each chunk's quotient is estimated in floating point and corrected
+/// exactly with integers.
 /// </summary>
 /// <remarks>
 /// <para>
-/// The dividend is a coefficient followed by zeros -- up to thirty-two digits -- and does
-/// not fit a machine word, but it never has to: the division is schoolbook in base 10^9.
-/// Each step brings in the next nine digits, estimates that step's quotient, and keeps an
-/// exact remainder. Two steps cover every quotient the format can ask for.
+/// The dividend is a coefficient followed by zeros, up to 32 digits. It does not fit in a
+/// 64-bit word, but it never needs to, because the division is schoolbook division in base
+/// 10^9. Each step brings in the next 9 digits, estimates the step's quotient, and keeps an
+/// exact remainder. Two steps cover every quotient the format needs.
 /// </para>
 /// <para>
-/// A hardware 64-bit divide costs upward of forty cycles on many cores, so the estimate is
-/// a double multiply by a precomputed reciprocal. The partial quotient is below 10^9 and
-/// the arithmetic carries fifty-two bits, so the estimate is within a fraction of one of
-/// the truth and a single compare against the divisor settles it. The remainder update runs
-/// modulo 2^64: the true remainder before correction lies in <c>(-d, 2d)</c> with d below
-/// 2^54, so the wrapped value is unambiguous when read as signed.
+/// A hardware 64-bit divide takes more than 40 cycles on many processors, so the estimate
+/// is a double multiply by a precomputed reciprocal. The partial quotient is below 10^9 and
+/// a double has 52 bits of precision, so the estimate is within one of the true quotient,
+/// and one comparison with the divisor corrects it. The remainder is computed modulo 2^64.
+/// Before correction the true remainder is in <c>(-d, 2d)</c> with d below 2^54, so the
+/// wrapped value is unambiguous when read as signed.
 /// </para>
 /// </remarks>
 internal static class Decimal64Divider
@@ -34,10 +34,15 @@ internal static class Decimal64Divider
     private const double ChunkBaseDouble = 1000000000.0;
 
     /// <summary>
-    /// Divides <c>leading * 10^chunkDigits + chunks</c> by <paramref name="divisor"/>, where
-    /// <paramref name="leading"/> is already below the divisor and <paramref name="chunks"/>
-    /// holds the remaining <paramref name="chunkDigits"/> digits, at most eighteen.
+    /// Divides <c>leading * 10^chunkDigits + chunks</c> by <paramref name="divisor"/>.
+    /// <paramref name="leading"/> must be below the divisor. <paramref name="chunks"/> holds
+    /// the remaining <paramref name="chunkDigits"/> digits, at most 18.
     /// </summary>
+    /// <param name="leading">The leading part of the dividend. It must be below <paramref name="divisor"/>.</param>
+    /// <param name="chunks">The remaining digits of the dividend, as an integer.</param>
+    /// <param name="chunkDigits">The number of digits in <paramref name="chunks"/>, at most 18.</param>
+    /// <param name="divisor">The divisor. It must not be zero.</param>
+    /// <param name="remainder">Receives the remainder.</param>
     /// <returns>The quotient, which has at most <paramref name="chunkDigits"/> digits.</returns>
     public static ulong Divide(ulong leading, ulong chunks, int chunkDigits, ulong divisor, out ulong remainder)
     {
@@ -60,9 +65,8 @@ internal static class Decimal64Divider
     }
 
     /// <summary>
-    /// One step: the remainder so far times the chunk's scale plus the chunk, divided by
-    /// the divisor. The chunk is below its scale and the remainder below the divisor, so the
-    /// quotient is below the scale.
+    /// One step: divides (remainder * scale + chunk) by the divisor. The chunk is below the
+    /// scale and the remainder is below the divisor, so the quotient is below the scale.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static ulong Step(ref ulong remainder, ulong chunk, ulong scale, double scaleDouble,

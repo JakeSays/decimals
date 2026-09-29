@@ -4,41 +4,50 @@
 namespace Decimals;
 
 /// <summary>
-/// A rounding mode and the conditions raised so far. Passed by reference to the
-/// <see cref="Decimal128"/> overloads that need either, so a caller can ask for a rounding
-/// mode other than the default and read back what happened.
+/// A rounding mode and the conditions raised so far. Pass it by reference to the
+/// <see cref="Decimal128"/> overloads that take it, to choose a rounding mode other than
+/// the default or to see which conditions an operation raised.
 /// </summary>
 /// <remarks>
-/// Precision and exponent range are not here: those are fixed by the format. An operation
-/// decides its own conditions from a clean slate and then adds them to
-/// <see cref="Status"/>, so what one operation raised never changes what the next reports.
+/// The context does not hold a precision or exponent range, because the format fixes those.
+/// Each operation works out its own conditions from scratch and then adds them to
+/// <see cref="Status"/>. So conditions raised by one operation never change what the next
+/// operation reports.
 /// </remarks>
 public struct Decimal128Context
 {
+    /// <summary>Creates a context that rounds half to even, with no conditions raised.</summary>
     public Decimal128Context()
         : this(Decimal128Rounding.HalfEven)
     {
     }
 
+    /// <summary>Creates a context with the given rounding mode, with no conditions raised.</summary>
+    /// <param name="rounding">The rounding mode for operations that use this context.</param>
     public Decimal128Context(Decimal128Rounding rounding)
     {
         Rounding = rounding;
         Status = Decimal128Status.None;
     }
 
+    /// <summary>The rounding mode for operations that use this context.</summary>
     public Decimal128Rounding Rounding { get; set; }
 
     /// <summary>
-    /// Conditions accumulated since this context was made or last cleared. Sticky: an
-    /// operation only ever adds to it.
+    /// The conditions raised since the context was created or last cleared. Operations only
+    /// add conditions; they never remove them.
     /// </summary>
     public Decimal128Status Status { get; set; }
 
+    /// <summary>Whether any of the given conditions has been raised.</summary>
+    /// <param name="condition">One condition, or several combined with <c>|</c>.</param>
+    /// <returns>True if <see cref="Status"/> contains at least one of the conditions.</returns>
     public readonly bool HasRaised(Decimal128Status condition)
     {
         return (Status & condition) != 0;
     }
 
+    /// <summary>Clears all raised conditions. The rounding mode is unchanged.</summary>
     public void ClearStatus()
     {
         Status = Decimal128Status.None;

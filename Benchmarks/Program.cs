@@ -6,9 +6,9 @@ using BenchmarkDotNet.Running;
 namespace Decimals.Benchmarks;
 
 /// <summary>
-/// Runs the benchmark classes. Pass <c>--filter *</c> to run everything, or a filter such
-/// as <c>--filter *Arithmetic*</c> to run one class; with no arguments the switcher lists
-/// what is available and waits to be told.
+/// Runs the benchmark classes. Pass <c>--filter *</c> to run all of them, or a filter such
+/// as <c>--filter *Decimal64Benchmarks*</c> to run one class. With no arguments, it lists
+/// the classes and asks which to run.
 /// </summary>
 public class Program
 {

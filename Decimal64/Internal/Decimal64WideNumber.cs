@@ -4,47 +4,52 @@
 namespace Decimals.Internal;
 
 /// <summary>
-/// An arbitrary-precision decimal as the elementary functions work on it: the coefficient
-/// in base-billion units, least significant first, beside a sign and an exponent. This is
+/// An arbitrary-precision decimal number for the elementary functions: a coefficient in
+/// base-billion units, least significant first, with a sign and an exponent. This is
 /// decNumber's <c>decNumber</c>.
 /// </summary>
 /// <remarks>
 /// <para>
-/// decNumber holds its coefficient in units of <c>DECDPUN</c> digits rather than as a
-/// binary integer, because every operation on it is decimal: rounding to a digit count,
-/// scaling by a power of ten, counting digits. Nine digits is the widest unit a 32-bit word
-/// holds, and a product of two of them fits 64 bits, which is what makes the multiply and
-/// divide loops work.
+/// decNumber stores its coefficient in units of <c>DECDPUN</c> digits instead of as a
+/// binary integer, because every operation on it is decimal: rounding to a number of
+/// digits, scaling by a power of ten, and counting digits. Nine digits is the widest unit
+/// a 32-bit word holds, and the product of two units fits in 64 bits, which the multiply
+/// and divide loops rely on.
 /// </para>
 /// <para>
-/// The units live in a buffer the caller owns. <see cref="Digits"/> is carried rather than
-/// derived, the way decNumber carries it, because almost every operation needs it and
-/// recomputing costs a scan.
+/// The units are in a buffer the caller owns. <see cref="Digits"/> is stored instead of
+/// computed, as in decNumber, because almost every operation needs it and computing it
+/// requires a scan.
 /// </para>
 /// </remarks>
 internal unsafe struct Decimal64WideNumber
 {
-    /// <summary>Digits in one unit.</summary>
+    /// <summary>The number of decimal digits in one unit.</summary>
     public const int DigitsPerUnit = 9;
 
-    /// <summary>The base each unit counts in.</summary>
+    /// <summary>The base of each unit: 10^9.</summary>
     public const uint UnitBase = 1000000000;
 
-    /// <summary>The least significant unit.</summary>
+    /// <summary>A pointer to the least significant unit of the coefficient.</summary>
     public uint* Lsu;
 
-    /// <summary>Units in use, which is always enough to hold <see cref="Digits"/>.</summary>
+    /// <summary>The number of units in use. It is always enough to hold <see cref="Digits"/>.</summary>
     public int Units;
 
-    /// <summary>Digits in the coefficient. A zero has one.</summary>
+    /// <summary>The number of digits in the coefficient. Zero has one digit.</summary>
     public int Digits;
 
+    /// <summary>The exponent: the value is the coefficient times 10 to this power.</summary>
     public int Exponent;
 
+    /// <summary>Whether the sign is negative.</summary>
     public bool IsNegative;
 
+    /// <summary>Whether the value is finite, infinite, or a NaN.</summary>
     public Decimal64Kind Kind;
 
+    /// <summary>Creates a positive zero with exponent zero over a buffer the caller owns.</summary>
+    /// <param name="lsu">The buffer for the coefficient's units. Its first unit is set to zero.</param>
     public Decimal64WideNumber(uint* lsu)
     {
         Lsu = lsu;
@@ -56,15 +61,19 @@ internal unsafe struct Decimal64WideNumber
         *lsu = 0;
     }
 
+    /// <summary>Whether the value is finite.</summary>
     public readonly bool IsFinite => Kind == Decimal64Kind.Finite;
 
+    /// <summary>Whether the value is a quiet or signaling NaN.</summary>
     public readonly bool IsNaN => Kind is Decimal64Kind.QuietNaN or Decimal64Kind.SignalingNaN;
 
+    /// <summary>Whether the value is an infinity.</summary>
     public readonly bool IsInfinity => Kind == Decimal64Kind.Infinity;
 
-    /// <summary>Where the value's leading digit sits.</summary>
+    /// <summary>The exponent of the value's leading digit.</summary>
     public readonly int AdjustedExponent => Exponent + Digits - 1;
 
+    /// <summary>Whether the value is a finite zero.</summary>
     public readonly bool IsZero
     {
         get
@@ -87,9 +96,12 @@ internal unsafe struct Decimal64WideNumber
     }
 
     /// <summary>
-    /// Reads a format-width value into units. The coefficient is taken nine digits at a
-    /// time from the low end, which is where a unit boundary falls whatever its length.
+    /// Converts a value of the format to units. The coefficient is split into nine-digit
+    /// units from the low end, where unit boundaries fall regardless of its length.
     /// </summary>
+    /// <param name="bits">The encoded value.</param>
+    /// <param name="lsu">The buffer for the coefficient's units. It must hold at least three units.</param>
+    /// <returns>The value as a wide number, with its coefficient in <paramref name="lsu"/>.</returns>
     public static Decimal64WideNumber FromBits(ulong bits, uint* lsu)
     {
         if (Decimal64Encoding.IsSpecial(bits))
@@ -107,6 +119,13 @@ internal unsafe struct Decimal64WideNumber
         return FromParts(Decimal64Kind.Finite, Decimal64Encoding.IsNegative(bits), exponent, coefficient, lsu);
     }
 
+    /// <summary>Creates a value from its parts.</summary>
+    /// <param name="kind">Whether the value is finite, infinite, or a NaN.</param>
+    /// <param name="negative">Whether the sign is negative.</param>
+    /// <param name="exponent">The exponent.</param>
+    /// <param name="coefficient">The coefficient, or a NaN's payload.</param>
+    /// <param name="lsu">The buffer for the coefficient's units. It must hold at least three units.</param>
+    /// <returns>The value, with its coefficient in <paramref name="lsu"/>.</returns>
     public static Decimal64WideNumber FromParts(Decimal64Kind kind, bool negative, int exponent, ulong coefficient, uint* lsu)
     {
         var number = new Decimal64WideNumber(lsu);
@@ -131,9 +150,10 @@ internal unsafe struct Decimal64WideNumber
     }
 
     /// <summary>
-    /// Back to the encoding. The caller is responsible for having finalized the value into
-    /// the format first, since only then is the coefficient known to fit.
+    /// Converts the value back to the format's encoding. The caller must first fit the value
+    /// to the format, because only then does the coefficient fit.
     /// </summary>
+    /// <returns>The encoded value.</returns>
     public readonly ulong ToBits()
     {
         if (Kind == Decimal64Kind.Infinity)
@@ -149,7 +169,10 @@ internal unsafe struct Decimal64WideNumber
         return Decimal64Encoding.Pack(IsNegative, Exponent, ToUInt64());
     }
 
-    /// <summary>A small signed integer, which is what the series constants arrive as.</summary>
+    /// <summary>Creates a value from a small integer. The series constants are given this way.</summary>
+    /// <param name="value">The integer.</param>
+    /// <param name="lsu">The buffer for the coefficient's units. It must hold at least two units.</param>
+    /// <returns>The integer with exponent zero, with its coefficient in <paramref name="lsu"/>.</returns>
     public static Decimal64WideNumber FromInt32(int value, uint* lsu)
     {
         var number = new Decimal64WideNumber(lsu);
@@ -171,7 +194,7 @@ internal unsafe struct Decimal64WideNumber
         return number;
     }
 
-    /// <summary>Whether the value is a whole number.</summary>
+    /// <summary>Whether the value is a finite integer.</summary>
     public readonly bool IsIntegerValued
     {
         get
@@ -186,12 +209,13 @@ internal unsafe struct Decimal64WideNumber
                 return true;
             }
 
-            // Whole exactly when the digits below the point are all zeros.
+            // The value is an integer if and only if all digits below the decimal point are
+            // zeros.
             return !Decimal64WideUnits.AnyBelow(Lsu, Units, -Exponent);
         }
     }
 
-    /// <summary>Whether the value is a whole number and that number is odd.</summary>
+    /// <summary>Whether the value is an odd integer.</summary>
     public readonly bool IsOddIntegerValued
     {
         get
@@ -201,44 +225,43 @@ internal unsafe struct Decimal64WideNumber
                 return false;
             }
 
-            // A positive exponent means trailing zeros, so the integer ends in one.
+            // A positive exponent means the integer ends in zeros, so it is even.
             if (Exponent > 0)
             {
                 return false;
             }
 
-            // The last integral digit is the one just above the point.
+            // The integer's last digit is the one just above the decimal point.
             return Decimal64WideUnits.DigitAt(Lsu, Units, -Exponent) % 2 != 0;
         }
     }
 
     /// <summary>
-    /// The value as a machine integer, when it is a whole number small enough to be one.
+    /// Converts the value to an <see cref="int"/>, if it is an integer small enough.
     /// </summary>
-    public readonly bool TryGetInt32(out int value)
+    /// <returns>The integer, or null if the value is not an integer from -1999999997 to 999999999.</returns>
+    public readonly int? ToInt32()
     {
-        value = 0;
-
         if (!IsIntegerValued)
         {
-            return false;
+            return null;
         }
 
         if (IsZero)
         {
-            return true;
+            return 0;
         }
 
-        // Beyond eleven integral digits the magnitude is past the window regardless.
+        // With more than 11 integer digits, the magnitude is out of range.
         if (Digits + Exponent > 11)
         {
-            return false;
+            return null;
         }
 
-        // The integral part, read a digit at a time from the point upward. A positive
-        // exponent puts the point below the coefficient entirely, so the walk stops at its
-        // last digit and the zeros are appended after. Eleven digits fit a machine word
-        // many times over, so nothing here can overflow.
+        // Read the integer part one digit at a time, from the top down to the decimal
+        // point. A positive exponent puts the decimal point below the coefficient, so the
+        // loop stops at the last digit and the zeros are appended afterward. 11 digits fit
+        // easily in a 64-bit word, so nothing here can overflow.
         var lowest = Exponent < 0 ? -Exponent : 0;
         var integral = 0L;
 
@@ -255,11 +278,14 @@ internal unsafe struct Decimal64WideNumber
         var limit = IsNegative ? 1999999997L : 999999999L;
         if (integral > limit)
         {
-            return false;
+            return null;
         }
 
-        value = (int)(IsNegative ? -integral : integral);
-        return true;
+        var signed = IsNegative
+            ? -integral
+            : integral;
+
+        return (int)signed;
     }
 
     /// <summary>Flips the sign.</summary>
@@ -268,15 +294,18 @@ internal unsafe struct Decimal64WideNumber
         IsNegative = !IsNegative;
     }
 
-    /// <summary>Units needed to hold a given number of digits.</summary>
+    /// <summary>The number of units needed to hold a number of digits.</summary>
+    /// <param name="digits">The number of digits.</param>
+    /// <returns>The number of units, rounded up.</returns>
     public static int UnitsFor(int digits)
     {
         return ((digits + DigitsPerUnit) - 1) / DigitsPerUnit;
     }
 
     /// <summary>
-    /// Recomputes the digit count from the units, which is what every operation that
-    /// changes the coefficient has to leave correct. decNumber's <c>decGetDigits</c>.
+    /// Recomputes <see cref="Digits"/> from the units and removes leading zero units. Every
+    /// operation that changes the coefficient must leave these correct. decNumber's
+    /// <c>decGetDigits</c>.
     /// </summary>
     public void CountDigits()
     {
@@ -291,7 +320,7 @@ internal unsafe struct Decimal64WideNumber
         var leading = Lsu[top];
         if (leading == 0)
         {
-            // Nothing but zeros, which is a zero and counts as one digit.
+            // All units are zero, so the value is zero, which has one digit.
             Digits = 1;
             return;
         }
@@ -299,7 +328,7 @@ internal unsafe struct Decimal64WideNumber
         Digits = (top * DigitsPerUnit) + Decimal64Tables.CountDigits(leading);
     }
 
-    /// <summary>Makes this a zero, keeping the buffer it points at.</summary>
+    /// <summary>Sets the value to a finite zero, keeping its buffer, sign, and exponent.</summary>
     public void SetZero()
     {
         *Lsu = 0;
@@ -308,7 +337,8 @@ internal unsafe struct Decimal64WideNumber
         Kind = Decimal64Kind.Finite;
     }
 
-    /// <summary>Copies another value's coefficient and shape into this one's buffer.</summary>
+    /// <summary>Copies another value's coefficient, sign, exponent, and kind into this value's buffer.</summary>
+    /// <param name="source">The value to copy.</param>
     public void CopyFrom(Decimal64WideNumber source)
     {
         for (var index = 0; index < source.Units; index++)
@@ -324,9 +354,10 @@ internal unsafe struct Decimal64WideNumber
     }
 
     /// <summary>
-    /// Reads the coefficient as a machine word, for the small values the series work with.
-    /// Only meaningful when the value is short enough to fit one.
+    /// Reads the coefficient as a 64-bit integer, for the small values the series use. The
+    /// result is only correct when the coefficient fits in 64 bits.
     /// </summary>
+    /// <returns>The coefficient.</returns>
     public readonly ulong ToUInt64()
     {
         var value = 0UL;

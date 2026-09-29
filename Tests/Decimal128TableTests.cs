@@ -7,11 +7,10 @@ using Decimals.Internal;
 namespace Decimals.Tests;
 
 /// <summary>
-/// The tables underneath <see cref="Decimal128"/>: the powers of ten at each width, the
-/// constants that stand in for dividing by them, and the digit counts. The constants were
-/// found by a generator and pasted in, so these re-derive them rather than trusting the
-/// paste, and then check the quotients against big-integer division over the numerators
-/// that reach them.
+/// Tests the tables used by <see cref="Decimal128"/>: the powers of ten at each width, the
+/// constants used to divide by them, and the digit counts. The constants were generated and
+/// pasted into the source. These tests recompute them, then check the quotients against
+/// big-integer division over the full range of numerators.
 /// </summary>
 public class Decimal128TableTests
 {
@@ -37,8 +36,8 @@ public class Decimal128TableTests
     }
 
     /// <summary>
-    /// The two-by-one constants: the divisor shifted until its top bit is set, and the word
-    /// that stands in for its reciprocal, <c>floor((2^128 - 1) / d') - 2^64</c>.
+    /// The 2-by-1 division constants: the divisor shifted left until its top bit is set,
+    /// and its reciprocal word, <c>floor((2^128 - 1) / d') - 2^64</c>.
     /// </summary>
     [Fact]
     public void TwoByOneConstantsAreTheDerivedOnes()
@@ -184,8 +183,8 @@ public class Decimal128TableTests
 
             Assert.Equal(left * right, ToBig(Decimal128LongInteger.Multiply(FromBig(left), FromBig(right))));
 
-            // The wide scaling is for an addend of at most thirty-four digits scaled to at
-            // most sixty-nine, which is what four words hold.
+            // The wide scaling takes an addend of up to 34 digits to at most 69 digits,
+            // which fits in four words.
             var coefficient = left % BigInteger.Pow(10, 34);
             var power = random.Next(0, 70 - coefficient.ToString().Length);
             Assert.Equal(coefficient * BigInteger.Pow(10, power),
@@ -196,7 +195,7 @@ public class Decimal128TableTests
             Assert.Equal(narrow * BigInteger.Pow(10, narrowPower),
                 ToBig(Decimal128Tables.Scale(FromBig(narrow), narrowPower)));
 
-            // A four-word value times a word has to stay inside four words.
+            // A four-word value times one word must still fit in four words.
             var word = (ulong)(right & ulong.MaxValue);
             var product = NextFourWords(random) >> random.Next(64, 128);
             Assert.Equal(product * word, ToBig(FromBigLong(product).MultiplyBy(word)));
@@ -268,9 +267,9 @@ public class Decimal128TableTests
     }
 
     /// <summary>
-    /// The conversions to double sum the words in floating point, so they can differ from
-    /// the correctly rounded value by a unit or two in the last place; the estimates built
-    /// on them need only fifty bits. The conversion back is exact.
+    /// The conversions to double add the words in floating point, so the result can be off
+    /// by 1 or 2 units in the last place. That is enough, because the estimates that use
+    /// them need only 50 bits. The conversion back from double is exact.
     /// </summary>
     [Fact]
     public void DoubleConversionsCarryTheTopBits()

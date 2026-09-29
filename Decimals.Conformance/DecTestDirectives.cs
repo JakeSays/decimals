@@ -4,10 +4,12 @@
 namespace Decimals.Conformance;
 
 /// <summary>
-/// The directive state in force for the tests that follow it in a file. A file starts with
-/// none of the four required directives set, and a <c>dectest</c> directive does not pass
-/// its settings down to the file it names.
+/// The directive settings that apply to the test lines after them in a file.
 /// </summary>
+/// <remarks>
+/// Each file starts with none of the four required directives set. A <c>dectest</c>
+/// directive does not pass its settings to the file it names.
+/// </remarks>
 public sealed class DecTestDirectives
 {
     public int Precision { get; private set; }
@@ -26,7 +28,7 @@ public sealed class DecTestDirectives
 
     public string RoundingName { get; private set; } = string.Empty;
 
-    /// <summary>True once precision, rounding, maxexponent, and minexponent have all been given.</summary>
+    /// <summary>True once precision, rounding, maxexponent, and minexponent are all set.</summary>
     public bool IsComplete { get; private set; }
 
     private bool _hasPrecision;

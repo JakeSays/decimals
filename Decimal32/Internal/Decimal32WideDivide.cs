@@ -4,31 +4,39 @@
 namespace Decimals.Internal;
 
 /// <summary>
-/// Division on the engine's unit arrays: decNumber's <c>decDivideOp</c>.
+/// Division on wide numbers: decNumber's <c>decDivideOp</c>.
 /// </summary>
 /// <remarks>
 /// <para>
-/// The operands are scaled first so that the quotient lands on the requested digit count,
-/// which turns a decimal division into one integer division of unit arrays. What the
-/// division leaves over decides the residue, and an exact result gives back the trailing
-/// zeros the scaling introduced so the exponent comes out where the specification wants it.
+/// The operands are scaled first so the quotient has the requested number of digits. This
+/// turns a decimal division into one integer division of unit arrays. The remainder sets
+/// the residue. For an exact result, the trailing zeros the scaling added are removed, so
+/// the exponent is the one the specification requires.
 /// </para>
 /// <para>
-/// The integer division is schoolbook in base-billion and the remainder is kept. The
-/// multiplier estimate divides by the leading divisor unit plus one, which can never run
-/// high, so each subtraction is always safe and the inner loop corrects what little the
-/// estimate leaves.
+/// The integer division is long division in base one billion, and it keeps the remainder.
+/// The multiplier estimate divides by the leading divisor unit plus one, so it is never
+/// too high. Each subtraction is therefore safe, and the inner loop corrects the small
+/// amount the estimate is too low.
 /// </para>
 /// </remarks>
 internal static unsafe class Decimal32WideDivide
 {
     /// <summary>
-    /// Divides two values and settles the quotient into the context.
+    /// Divides two values and rounds the quotient to the context.
     /// </summary>
     /// <remarks>
-    /// The three work buffers hold the scaled numerator, the scaled denominator, and the
-    /// running remainder; each needs room for the operands' digits plus the context's.
+    /// Each of the three work buffers needs room for the operands' digits plus the context's
+    /// digits.
     /// </remarks>
+    /// <param name="result">Receives the quotient.</param>
+    /// <param name="left">The dividend.</param>
+    /// <param name="right">The divisor.</param>
+    /// <param name="context">The precision, rounding, and exponent limits to apply.</param>
+    /// <param name="status">Receives the conditions the operation raises.</param>
+    /// <param name="numerator">A work buffer for the scaled dividend.</param>
+    /// <param name="denominator">A work buffer for the scaled divisor.</param>
+    /// <param name="accumulator">A work buffer for the running remainder.</param>
     public static void Divide(ref Decimal32WideNumber result, Decimal32WideNumber left, Decimal32WideNumber right,
         Decimal32WideContext context, ref Decimal32Status status, uint* numerator, uint* denominator,
         uint* accumulator)
@@ -66,8 +74,8 @@ internal static unsafe class Decimal32WideDivide
 
         if (right.IsInfinity)
         {
-            // The ideal exponent runs off to negative infinity, so the zero settles at the
-            // smallest exponent the context allows and says it was clamped.
+            // The ideal exponent is unbounded below, so the zero gets the smallest exponent
+            // the context allows, and the result is reported as clamped.
             status |= Decimal32Status.Clamped;
             result.SetZero();
             result.IsNegative = negative;
@@ -106,7 +114,7 @@ internal static unsafe class Decimal32WideDivide
             return;
         }
 
-        // Scale so the quotient lands on the requested number of digits, give or take one.
+        // Scale so the quotient has the requested number of digits, plus or minus one.
         var shift = context.Digits - left.Digits + right.Digits;
 
         var numeratorLength = Copy(left, numerator);
@@ -135,8 +143,8 @@ internal static unsafe class Decimal32WideDivide
 
         if (exact)
         {
-            // The specification wants the exponent nearest dividend minus divisor: give
-            // back the trailing zeros the scaling introduced, and no more.
+            // The specification requires the exponent closest to the dividend's exponent
+            // minus the divisor's. Remove the trailing zeros the scaling added, and no more.
             while (result.Exponent < idealExponent
                 && Decimal32WideUnits.DigitAt(result.Lsu, result.Units, 0) == 0
                 && !result.IsZero)
@@ -148,7 +156,8 @@ internal static unsafe class Decimal32WideDivide
         }
         else
         {
-            // Twice the remainder against the divisor says which side of half it falls on.
+            // Comparing twice the remainder with the divisor shows whether the remainder is
+            // below, at, or above half.
             var doubled = Decimal32WideUnits.Double(accumulator, remainderLength);
             residue = Decimal32WideUnits.Compare(accumulator, doubled, denominator, denominatorLength) switch
             {
@@ -166,7 +175,17 @@ internal static unsafe class Decimal32WideDivide
     /// Integer division of two unit arrays. The remainder is left in
     /// <paramref name="accumulator"/>.
     /// </summary>
-    /// <returns>Units in the quotient.</returns>
+    /// <param name="numerator">The dividend's units, least significant first.</param>
+    /// <param name="numeratorLength">The number of units in the dividend.</param>
+    /// <param name="divisor">The divisor's units, least significant first. The divisor must not be zero.</param>
+    /// <param name="divisorLength">The number of units in the divisor.</param>
+    /// <param name="accumulator">
+    /// A work buffer of at least <paramref name="numeratorLength"/> + 1 units. It receives the
+    /// remainder.
+    /// </param>
+    /// <param name="quotient">Receives the quotient's units.</param>
+    /// <param name="remainderLength">Receives the number of units in the remainder.</param>
+    /// <returns>The number of units in the quotient.</returns>
     public static int DivRem(uint* numerator, int numeratorLength, uint* divisor,
         int divisorLength, uint* accumulator, uint* quotient, out int remainderLength)
     {
@@ -180,7 +199,8 @@ internal static unsafe class Decimal32WideDivide
             accumulator[index] = numerator[index];
         }
 
-        // One above the numerator, for the window to reach into.
+        // One extra unit above the numerator, because the window reads one unit past the
+        // divisor's length.
         accumulator[numeratorLength] = 0;
 
         var quotientLength = numeratorLength - divisorLength + 1;
@@ -196,8 +216,8 @@ internal static unsafe class Decimal32WideDivide
             quotient[index] = 0;
         }
 
-        // The estimate divides by one more than the leading divisor unit, which can never
-        // run high; what it leaves low the loop takes off in another pass or two.
+        // The estimate divides by one more than the leading divisor unit, so it is never
+        // too high. When it is too low, the loop subtracts again, usually once or twice.
         var estimateDivisor = (ulong)divisor[divisorLength - 1] + 1;
 
         for (var position = quotientLength - 1; position >= 0; position--)
@@ -243,8 +263,8 @@ internal static unsafe class Decimal32WideDivide
     }
 
     /// <summary>
-    /// Whether the window, which is one unit longer than the divisor, is at least as large
-    /// as it.
+    /// Compares the window, which is one unit longer than the divisor, with the divisor.
+    /// Returns -1, 0, or 1.
     /// </summary>
     private static int CompareWindow(uint* window, uint* divisor, int divisorLength)
     {
@@ -265,7 +285,7 @@ internal static unsafe class Decimal32WideDivide
     }
 
     /// <summary>
-    /// Subtracts the divisor times <paramref name="multiplier"/> out of the window.
+    /// Subtracts the divisor times <paramref name="multiplier"/> from the window.
     /// </summary>
     private static void SubtractScaled(uint* window, uint* divisor, int divisorLength,
         ulong multiplier)
